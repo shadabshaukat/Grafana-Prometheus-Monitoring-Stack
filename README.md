@@ -37,6 +37,7 @@ This repository is refactored so all operational scripts read from `.env` (singl
 ├── README.md
 ├── generate_configs.sh
 ├── deploy_stack.sh
+├── check_grafana_bindings.sh
 ├── destroy_stack.sh
 ├── rotate_certs.sh
 ├── smoke_test.sh
@@ -110,6 +111,18 @@ sudo ./rotate_certs.sh 180      # custom days
 
 ```bash
 sudo ./smoke_test.sh
+```
+
+### Manual Grafana datasource-binding check
+
+```bash
+sudo ./check_grafana_bindings.sh
+```
+
+By default, `deploy_stack.sh` runs this checker automatically when:
+
+```env
+RUN_GRAFANA_BINDING_CHECK_AFTER_DEPLOY=true
 ```
 
 ---
@@ -210,11 +223,10 @@ PROM_ADDITIONAL_SCRAPE_CONFIG=/opt/observability-stack/prometheus/extra-scrape-c
 
 The generator appends this file to `prometheus.yml` when set.
 
-### New OCI PostgreSQL dashboard
+### Unified dashboard (single pane of glass)
 
 The generator creates:
 
-- `${BASE_DIR}/grafana/dashboards/oci-postgresql-metrics.json`
 - `${BASE_DIR}/grafana/dashboards/postgresql-unified-insights.json`
 
 `postgresql-unified-insights.json` is now **bootstrapped directly by the stack** (generated from `generate_configs.sh`) and does **not** require importing/migrating an external JSON at runtime.
@@ -233,10 +245,23 @@ Panels include (OCI Monitoring datasource):
 
 - CPU Utilization
 - Memory Utilization
-- Storage Utilization
 - Database Connections
 - Read IOPS
 - Write IOPS
+
+### Tenancy-wide strategy (multi-region/multi-compartment)
+
+Recommended options:
+
+1. **Native OCI datasource path (current default)**
+   - Keep unified dashboard.
+   - Use dashboard variables (`compartment`, `resourceGroup`) to switch scope quickly.
+   - Add one OCI datasource per region when you need cross-region views in Grafana.
+
+2. **Prometheus-centric path (scale-friendly)**
+   - Ingest OCI metrics into Prometheus (via OTel/collector pipeline).
+   - Add `region` + `compartment` labels at ingestion time.
+   - Use one datasource (`prometheus`) for tenancy-wide, multi-region panels.
 
 ---
 

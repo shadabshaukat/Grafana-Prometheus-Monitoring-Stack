@@ -81,6 +81,9 @@ load_env() {
   : "${CERT_OU:=Platform}"
   : "${CERT_CN:=grafana.local}"
   : "${RUN_SMOKE_TEST_AFTER_DEPLOY:=true}"
+  : "${RUN_GRAFANA_BINDING_CHECK_AFTER_DEPLOY:=true}"
+  : "${GRAFANA_UNIFIED_DASH_UID:=postgresql-unified-insights}"
+  : "${GRAFANA_API_BASE_URL:=}"
   : "${HEALTHCHECK_MAX_RETRIES:=30}"
   : "${HEALTHCHECK_SLEEP_SECONDS:=2}"
 

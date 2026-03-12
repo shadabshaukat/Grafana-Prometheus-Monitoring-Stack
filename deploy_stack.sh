@@ -9,6 +9,7 @@ load_env
 
 GEN_SCRIPT="$ROOT_DIR/generate_configs.sh"
 SMOKE_SCRIPT="$ROOT_DIR/smoke_test.sh"
+CHECKER_SCRIPT="$ROOT_DIR/check_grafana_bindings.sh"
 
 if [[ "$BASE_DIR" == /opt/* || "$ENABLE_FIREWALL" == "true" || "$ENABLE_CHOWN" == "true" ]]; then
   require_root
@@ -76,6 +77,11 @@ fi
 if [[ "$RUN_SMOKE_TEST_AFTER_DEPLOY" == "true" && -f "$SMOKE_SCRIPT" ]]; then
   log "Running smoke test script..."
   bash "$SMOKE_SCRIPT"
+fi
+
+if [[ "$RUN_GRAFANA_BINDING_CHECK_AFTER_DEPLOY" == "true" && -f "$CHECKER_SCRIPT" ]]; then
+  log "Running Grafana datasource binding checker..."
+  bash "$CHECKER_SCRIPT"
 fi
 
 log "[6/6] Done"

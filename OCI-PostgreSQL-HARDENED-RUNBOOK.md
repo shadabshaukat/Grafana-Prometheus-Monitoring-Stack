@@ -10,7 +10,7 @@ This runbook provides a production-style setup for:
 
 > **Important (current build):** This repository is now **env-driven**.  
 > The operational source of truth is: `.env`, `lib/common.sh`, and these scripts:  
-> `generate_configs.sh`, `deploy_stack.sh`, `destroy_stack.sh`, `rotate_certs.sh`, `smoke_test.sh`.
+> `generate_configs.sh`, `deploy_stack.sh`, `check_grafana_bindings.sh`, `destroy_stack.sh`, `rotate_certs.sh`, `smoke_test.sh`.
 
 ---
 
@@ -293,7 +293,7 @@ Create one dashboard titled `OCI PostgreSQL Unified Insights` with two top-level
 - Top tables by dead tuple %
 - Autovacuum cadence by table
 
-> Keep datasource UID as `prometheus` for portability.
+> Keep a single unified dashboard. Prometheus panels should bind to `GRAFANA_DS_UID`, and OCI panels should bind explicitly to `OCI_DS_UID`.
 
 ---
 
@@ -606,6 +606,7 @@ You now have the following scripts (generated in your working directory):
 - `lib/common.sh` → shared functions and `.env` loader used by all scripts
 - `generate_configs.sh` → writes all YAML/config files under `/opt/observability-stack`
 - `deploy_stack.sh` → one-command deploy (generate configs, create cert if missing, start stack, apply firewall)
+- `check_grafana_bindings.sh` → Grafana API validation for datasource bindings on unified dashboard
 - `destroy_stack.sh` → one-command destroy (optionally purge persisted data)
 - `rotate_certs.sh` → rotate self-signed TLS cert and reload NGINX
 - `smoke_test.sh` → post-rebuild smoke tests
@@ -613,8 +614,8 @@ You now have the following scripts (generated in your working directory):
 Copy scripts to target path and make executable:
 
 ```bash
-sudo cp /Users/shadab/Downloads/{generate_configs.sh,deploy_stack.sh,destroy_stack.sh,rotate_certs.sh,smoke_test.sh} /opt/observability-stack/
-sudo chmod +x /opt/observability-stack/{generate_configs.sh,deploy_stack.sh,destroy_stack.sh,rotate_certs.sh,smoke_test.sh}
+sudo cp /Users/shadab/Downloads/{generate_configs.sh,deploy_stack.sh,check_grafana_bindings.sh,destroy_stack.sh,rotate_certs.sh,smoke_test.sh} /opt/observability-stack/
+sudo chmod +x /opt/observability-stack/{generate_configs.sh,deploy_stack.sh,check_grafana_bindings.sh,destroy_stack.sh,rotate_certs.sh,smoke_test.sh}
 ```
 
 Also copy env + shared library:
@@ -666,6 +667,20 @@ sudo /opt/observability-stack/rotate_certs.sh 180
 
 ```bash
 sudo /opt/observability-stack/smoke_test.sh
+```
+
+### Validate unified dashboard datasource bindings (Grafana API)
+
+```bash
+sudo /opt/observability-stack/check_grafana_bindings.sh
+```
+
+Auto-run after deploy is controlled by `.env`:
+
+```env
+RUN_GRAFANA_BINDING_CHECK_AFTER_DEPLOY=true
+GRAFANA_UNIFIED_DASH_UID=postgresql-unified-insights
+GRAFANA_API_BASE_URL=
 ```
 
 ---
@@ -738,13 +753,12 @@ curl -kI https://127.0.0.1:8443/login
 
 ---
 
-## 12) OCI Metrics datasource + OCI PostgreSQL metrics dashboard
+## 12) OCI Metrics datasource + unified dashboard
 
 The current build can auto-provision:
 
 1. **Oracle Cloud Infrastructure Metrics** Grafana datasource (`oci-metrics-datasource`)  
-2. **OCI PostgreSQL metrics dashboard** (`oci-postgresql-metrics.json`)
-3. **OCI PostgreSQL unified insights dashboard** (`postgresql-unified-insights.json`)
+2. **OCI PostgreSQL unified insights dashboard** (`postgresql-unified-insights.json`)
 
 ### Required `.env` variables
 
@@ -816,7 +830,6 @@ sudo ./deploy_stack.sh
 Generated assets:
 
 - `${BASE_DIR}/grafana/provisioning/datasources/datasources.yml`
-- `${BASE_DIR}/grafana/dashboards/oci-postgresql-metrics.json`
 - `${BASE_DIR}/grafana/dashboards/postgresql-unified-insights.json`
 
 `postgresql-unified-insights.json` is generated natively by `generate_configs.sh` (bootstrapped from embedded structure) and does not require importing an external JSON dashboard file at runtime.
@@ -830,7 +843,6 @@ The OCI dashboard includes panels for:
 
 - CPU Utilization
 - Memory Utilization
-- Storage Utilization
 - Database Connections
 - Read IOPS
 - Write IOPS
