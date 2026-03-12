@@ -40,10 +40,55 @@ if [[ "$ENABLE_CHOWN" == "true" ]]; then
   chown -R 65534:65534 "$PROM_DATA_DIR" || true
 fi
 
+GRAFANA_EFFECTIVE_PLUGINS="$GRAFANA_INSTALL_PLUGINS"
+if [[ "$ENABLE_OCI_PLUGINS" == "true" ]]; then
+  for plugin_id in "$OCI_METRICS_PLUGIN_ID" "$OCI_LOGS_PLUGIN_ID"; do
+    [[ -z "$plugin_id" ]] && continue
+    if [[ -z "$GRAFANA_EFFECTIVE_PLUGINS" ]]; then
+      GRAFANA_EFFECTIVE_PLUGINS="$plugin_id"
+    elif [[ ",$GRAFANA_EFFECTIVE_PLUGINS," != *",$plugin_id,"* ]]; then
+      GRAFANA_EFFECTIVE_PLUGINS="${GRAFANA_EFFECTIVE_PLUGINS},${plugin_id}"
+    fi
+  done
+fi
+
+write_file "$PROM_DIR/recording-rules.yml" <<'EOF_RULES'
+groups:
+  - name: postgresql-unified-recording-rules
+    interval: 30s
+    rules:
+      - record: pg:availability:max
+        expr: max(pg_up)
+
+      - record: pg:connections_utilization_percent
+        expr: 100 * sum by (instance) (pg_stat_activity_count) / clamp_min(sum by (instance) (pg_settings_max_connections), 1)
+
+      - record: pg:deadlocks_rate5m
+        expr: sum by (instance, datname) (rate(pg_stat_database_deadlocks[5m]))
+
+      - record: pg:replication_replay_lag_seconds:max
+        expr: max by (instance) (pg_replication_delay_replay_lag_seconds)
+
+      - record: pg:transactions_rate5m
+        expr: sum by (instance, datname) (rate(pg_stat_database_xact_commit[5m]) + rate(pg_stat_database_xact_rollback[5m]))
+
+      - record: pg:cache_hit_percent
+        expr: 100 * sum by (instance, datname) (pg_stat_database_blks_hit) / clamp_min(sum by (instance, datname) (pg_stat_database_blks_hit + pg_stat_database_blks_read), 1)
+
+      - record: pg:checkpoints_rate5m
+        expr: sum by (instance) (rate(pg_stat_bgwriter_checkpoints_timed[5m]) + rate(pg_stat_bgwriter_checkpoints_req[5m]))
+
+      - record: pg:autovacuum_dead_tuples
+        expr: sum by (instance, datname) (pg_stat_user_tables_n_dead_tup)
+EOF_RULES
+
 if should_write "$PROM_DIR/prometheus.yml"; then
   write_file "$PROM_DIR/prometheus.yml" <<EOF_PROM
 global:
   scrape_interval: ${PROM_SCRAPE_INTERVAL}
+
+rule_files:
+  - /etc/prometheus/recording-rules.yml
 
 scrape_configs:
   - job_name: prometheus
@@ -131,11 +176,11 @@ write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_DASH
   "title": "PostgreSQL Unified Insights",
   "uid": "postgresql-unified-insights",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "editable": true,
   "time": {"from": "now-6h", "to": "now"},
-  "tags": ["postgresql", "prometheus", "unified"],
+  "tags": ["postgresql", "prometheus", "unified", "slo"],
   "templating": {
     "list": [
       {
@@ -175,95 +220,95 @@ write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_DASH
   },
   "panels": [
     {
+      "type": "text",
+      "title": "Dashboard Usage",
+      "gridPos": {"h": 3, "w": 24, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "options": {
+        "content": "### Unified PostgreSQL Observability\\nUse **instance** and **datname** filters for drilldown.\\nSLO panels are thresholded for quick triage."
+      }
+    },
+    {
       "type": "row",
-      "title": "PostgreSQL Core (Prometheus)",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "title": "SLO & Alerting Signals",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 3},
       "collapsed": false
     },
     {
       "type": "stat",
-      "title": "Postgres Up",
-      "gridPos": {"h": 4, "w": 3, "x": 0, "y": 1},
+      "title": "Availability (up)",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 4},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
       "targets": [{"refId": "A", "expr": "max(pg_up{instance=~\"${INSTANCE_VAR}\"})"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
     },
     {
       "type": "stat",
-      "title": "Uptime (days)",
-      "gridPos": {"h": 4, "w": 3, "x": 3, "y": 1},
+      "title": "Connection Utilization (%)",
+      "gridPos": {"h": 4, "w": 5, "x": 4, "y": 4},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "(time() - max(pg_postmaster_start_time_seconds{instance=~\"${INSTANCE_VAR}\"})) / 86400"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Max Connections",
-      "gridPos": {"h": 4, "w": 3, "x": 6, "y": 1},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "sum(pg_settings_max_connections{instance=~\"${INSTANCE_VAR}\"})"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Connection Utilization %",
-      "gridPos": {"h": 4, "w": 3, "x": 9, "y": 1},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "100 * sum(pg_stat_activity_count{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}) / clamp_min(sum(pg_settings_max_connections{instance=~\"${INSTANCE_VAR}\"}), 1)"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Active Sessions",
-      "gridPos": {"h": 4, "w": 3, "x": 12, "y": 1},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "sum(pg_stat_activity_count{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\",state=\"active\"})"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Idle Sessions",
-      "gridPos": {"h": 4, "w": 3, "x": 15, "y": 1},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "sum(pg_stat_activity_count{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\",state=~\"idle|idle in transaction|idle in transaction .*aborted.*\"})"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Cache Hit %",
-      "gridPos": {"h": 4, "w": 3, "x": 18, "y": 1},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "100 * sum(pg_stat_database_blks_hit{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}) / clamp_min(sum(pg_stat_database_blks_hit{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}) + sum(pg_stat_database_blks_read{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}), 1)"}],
+      "targets": [{"refId": "A", "expr": "avg(pg:connections_utilization_percent{instance=~\"${INSTANCE_VAR}\"})"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 85}]}}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
     },
     {
       "type": "stat",
       "title": "Deadlocks / s",
-      "gridPos": {"h": 4, "w": 3, "x": 21, "y": 1},
+      "gridPos": {"h": 4, "w": 5, "x": 9, "y": 4},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "sum(rate(pg_stat_database_deadlocks{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))"}],
+      "targets": [{"refId": "A", "expr": "sum(pg:deadlocks_rate5m{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"})"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.01}, {"color": "red", "value": 0.1}]}}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
     },
     {
+      "type": "stat",
+      "title": "Replication Lag (s)",
+      "gridPos": {"h": 4, "w": 5, "x": 14, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [{"refId": "A", "expr": "max(pg:replication_replay_lag_seconds:max{instance=~\"${INSTANCE_VAR}\"})"}],
+      "fieldConfig": {"defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 30}]}}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "type": "stat",
+      "title": "SQL Avg Latency (ms)",
+      "gridPos": {"h": 4, "w": 5, "x": 19, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [{"refId": "A", "expr": "sum(pg_stat_statements_top_total_exec_time_ms{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}) / clamp_min(sum(pg_stat_statements_top_calls{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}), 1)"}],
+      "fieldConfig": {"defaults": {"unit": "ms", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 50}, {"color": "red", "value": 200}]}}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "type": "timeseries",
+      "title": "SLO Signals Over Time",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [
+        {"refId": "A", "expr": "avg(pg:connections_utilization_percent{instance=~\"${INSTANCE_VAR}\"})", "legendFormat": "connection util %"},
+        {"refId": "B", "expr": "sum(pg:deadlocks_rate5m{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"})", "legendFormat": "deadlocks/s"},
+        {"refId": "C", "expr": "max(pg:replication_replay_lag_seconds:max{instance=~\"${INSTANCE_VAR}\"})", "legendFormat": "replication lag s"}
+      ]
+    },
+    {
       "type": "row",
-      "title": "Workload & Sessions",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 5},
+      "title": "Core Workload & Sessions",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 16},
       "collapsed": false
     },
     {
       "type": "timeseries",
-      "title": "Transactions/s (Commit + Rollback)",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+      "title": "Transactions / s",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 17},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
       "targets": [
-        {"refId": "A", "expr": "sum(rate(pg_stat_database_xact_commit{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "commit"},
-        {"refId": "B", "expr": "sum(rate(pg_stat_database_xact_rollback{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "rollback"}
+        {"refId": "A", "expr": "sum(pg:transactions_rate5m{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"})", "legendFormat": "tps"}
       ]
     },
     {
       "type": "timeseries",
       "title": "Session States",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 17},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
       "targets": [
         {"refId": "A", "expr": "sum(pg_stat_activity_count{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\",state=\"active\"})", "legendFormat": "active"},
@@ -271,56 +316,24 @@ write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_DASH
       ]
     },
     {
-      "type": "timeseries",
-      "title": "Tuple Operations / s",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [
-        {"refId": "A", "expr": "sum(rate(pg_stat_database_tup_returned{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "returned"},
-        {"refId": "B", "expr": "sum(rate(pg_stat_database_tup_fetched{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "fetched"},
-        {"refId": "C", "expr": "sum(rate(pg_stat_database_tup_inserted{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "inserted"},
-        {"refId": "D", "expr": "sum(rate(pg_stat_database_tup_updated{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "updated"},
-        {"refId": "E", "expr": "sum(rate(pg_stat_database_tup_deleted{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "deleted"}
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Read vs Write Tuple Throughput / s",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [
-        {"refId": "A", "expr": "sum(rate(pg_stat_database_tup_returned{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m])) + sum(rate(pg_stat_database_tup_fetched{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "read tuple ops/s"},
-        {"refId": "B", "expr": "sum(rate(pg_stat_database_tup_inserted{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m])) + sum(rate(pg_stat_database_tup_updated{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m])) + sum(rate(pg_stat_database_tup_deleted{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "write tuple ops/s"}
-      ]
-    },
-    {
       "type": "row",
-      "title": "Storage, WAL & Checkpoints",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 22},
+      "title": "WAL, Checkpoint & Storage Pressure",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 25},
       "collapsed": false
     },
     {
       "type": "timeseries",
-      "title": "Database Size (GiB)",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 23},
+      "title": "Checkpoint Rate / s",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 26},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
       "targets": [
-        {"refId": "A", "expr": "sum(pg_database_size_bytes{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}) / 1073741824", "legendFormat": "db size GiB"}
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Temp File (MiB/s)",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 23},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [
-        {"refId": "A", "expr": "sum(rate(pg_stat_database_temp_bytes{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m])) / 1048576", "legendFormat": "temp MiB/s"}
+        {"refId": "A", "expr": "sum(pg:checkpoints_rate5m{instance=~\"${INSTANCE_VAR}\"})", "legendFormat": "checkpoints/s"}
       ]
     },
     {
       "type": "timeseries",
       "title": "Checkpoint Write vs Sync Time / s",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 31},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 26},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
       "targets": [
         {"refId": "A", "expr": "sum(rate(pg_stat_bgwriter_checkpoint_write_time_total{instance=~\"${INSTANCE_VAR}\"}[5m]))", "legendFormat": "checkpoint write time/s"},
@@ -329,26 +342,48 @@ write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_DASH
     },
     {
       "type": "timeseries",
-      "title": "BGWriter Buffers / s",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 31},
+      "title": "Database Size (GiB)",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 26},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
       "targets": [
-        {"refId": "A", "expr": "sum(rate(pg_stat_bgwriter_buffers_backend_total{instance=~\"${INSTANCE_VAR}\"}[5m])) or sum(rate(pg_stat_bgwriter_buffers_backend_fsync_total{instance=~\"${INSTANCE_VAR}\"}[5m]))", "legendFormat": "backend"},
-        {"refId": "B", "expr": "sum(rate(pg_stat_bgwriter_buffers_alloc_total{instance=~\"${INSTANCE_VAR}\"}[5m]))", "legendFormat": "alloc"},
-        {"refId": "C", "expr": "sum(rate(pg_stat_bgwriter_buffers_checkpoint_total{instance=~\"${INSTANCE_VAR}\"}[5m]))", "legendFormat": "checkpoint"},
-        {"refId": "D", "expr": "sum(rate(pg_stat_bgwriter_buffers_clean_total{instance=~\"${INSTANCE_VAR}\"}[5m]))", "legendFormat": "clean"}
+        {"refId": "A", "expr": "sum(pg_database_size_bytes{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}) / 1073741824", "legendFormat": "db size GiB"}
       ]
     },
     {
       "type": "row",
-      "title": "Locks, Replication & Process Health",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 39},
+      "title": "Autovacuum & Table Health",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 34},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Dead Tuples (Top 10 Tables)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [
+        {"refId": "A", "expr": "topk(10, pg_stat_user_tables_n_dead_tup{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"})", "legendFormat": "{{schemaname}}.{{relname}}"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "AutoVacuum Count / s",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [
+        {"refId": "A", "expr": "sum(rate(pg_stat_user_tables_autovacuum_count{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "autovacuum/s"},
+        {"refId": "B", "expr": "sum(rate(pg_stat_user_tables_autoanalyze_count{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "autoanalyze/s"}
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Locks, Replication & Exporter Health",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 43},
       "collapsed": false
     },
     {
       "type": "timeseries",
       "title": "Locks by Mode",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 40},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 44},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
       "targets": [
         {"refId": "A", "expr": "sum by (mode) (pg_locks_count{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\",mode=~\"${MODE_VAR}\"})", "legendFormat": "{{mode}}"}
@@ -356,27 +391,17 @@ write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_DASH
     },
     {
       "type": "timeseries",
-      "title": "Conflicts / Deadlocks / s",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 40},
+      "title": "Replication Replay Lag (s)",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 44},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
       "targets": [
-        {"refId": "A", "expr": "sum(rate(pg_stat_database_conflicts{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "conflicts/s"},
-        {"refId": "B", "expr": "sum(rate(pg_stat_database_deadlocks{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "deadlocks/s"}
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Replication Replay Lag (seconds)",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 48},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [
-        {"refId": "A", "expr": "max(pg_replication_delay_replay_lag_seconds{instance=~\"${INSTANCE_VAR}\"})", "legendFormat": "replay lag"}
+        {"refId": "A", "expr": "max(pg:replication_replay_lag_seconds:max{instance=~\"${INSTANCE_VAR}\"})", "legendFormat": "replay lag s"}
       ]
     },
     {
       "type": "timeseries",
       "title": "Exporter Process (CPU + Open FDs)",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 48},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 44},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
       "targets": [
         {"refId": "A", "expr": "avg(rate(process_cpu_seconds_total{instance=~\"${INSTANCE_VAR}\"}[5m]))", "legendFormat": "cpu seconds/s"},
@@ -385,182 +410,44 @@ write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_DASH
     },
     {
       "type": "row",
-      "title": "PostgreSQL Configuration Snapshot",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 56},
+      "title": "SQL Performance (Cardinality-Safe)",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 52},
       "collapsed": false
-    },
-    {
-      "type": "stat",
-      "title": "Shared Buffers (GiB)",
-      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 57},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "avg(pg_settings_shared_buffers_bytes{instance=~\"${INSTANCE_VAR}\"}) / 1073741824"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Effective Cache Size (GiB)",
-      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 57},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "avg(pg_settings_effective_cache_size_bytes{instance=~\"${INSTANCE_VAR}\"}) / 1073741824"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Work Mem (MiB)",
-      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 57},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "avg(pg_settings_work_mem_bytes{instance=~\"${INSTANCE_VAR}\"}) / 1048576"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Maintenance Work Mem (MiB)",
-      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 57},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "avg(pg_settings_maintenance_work_mem_bytes{instance=~\"${INSTANCE_VAR}\"}) / 1048576"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Max WAL Size (GiB)",
-      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 57},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "avg(pg_settings_max_wal_size_bytes{instance=~\"${INSTANCE_VAR}\"}) / 1073741824"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Max Worker Processes",
-      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 57},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "avg(pg_settings_max_worker_processes{instance=~\"${INSTANCE_VAR}\"})"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Max Parallel Workers",
-      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 61},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "avg(pg_settings_max_parallel_workers{instance=~\"${INSTANCE_VAR}\"})"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Random Page Cost",
-      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 61},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "avg(pg_settings_random_page_cost{instance=~\"${INSTANCE_VAR}\"})"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Seq Page Cost",
-      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 61},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "avg(pg_settings_seq_page_cost{instance=~\"${INSTANCE_VAR}\"})"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "stat",
-      "title": "Postmaster Start Time",
-      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 61},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [{"refId": "A", "expr": "max(pg_postmaster_start_time_seconds{instance=~\"${INSTANCE_VAR}\"} * 1000)"}],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
-    },
-    {
-      "type": "table",
-      "title": "PostgreSQL Version (pg_static labels)",
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 61},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [
-        {"refId": "A", "expr": "pg_static{instance=~\"${INSTANCE_VAR}\"}", "instant": true, "format": "table"}
-      ]
-    },
-    {
-      "type": "row",
-      "title": "SQL Performance",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 69},
-      "collapsed": false
-    },
-    {
-      "type": "stat",
-      "title": "SQL Avg Latency (ms)",
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 70},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [
-        {"refId": "A", "expr": "(sum(pg_stat_statements_top_total_exec_time_ms{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}) or sum(top_sql_performance_total_time{instance=~\"${INSTANCE_VAR}\"})) / clamp_min((sum(pg_stat_statements_top_calls{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}) or sum(top_sql_performance_calls{instance=~\"${INSTANCE_VAR}\"})), 1)"}
-      ],
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
     },
     {
       "type": "timeseries",
-      "title": "Top SQL Calls",
-      "gridPos": {"h": 4, "w": 18, "x": 6, "y": 70},
+      "title": "Top SQL by Calls (queryid + short_query)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 53},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
       "targets": [
-        {"refId": "A", "expr": "topk(10, sum by (short_query) (pg_stat_statements_top_calls{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}) or sum by (query) (top_sql_statements_calls{instance=~\"${INSTANCE_VAR}\"}) or sum by (query) (top_sql_performance_calls{instance=~\"${INSTANCE_VAR}\"}))", "legendFormat": "{{short_query}}{{query}}"}
+        {"refId": "A", "expr": "topk(10, sum by (queryid, short_query) (pg_stat_statements_top_calls{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}))", "legendFormat": "{{queryid}} | {{short_query}}"}
       ]
     },
     {
       "type": "timeseries",
-      "title": "Top SQL Total Exec Time (ms)",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 74},
+      "title": "Top SQL by Total Exec Time (ms)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 53},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
       "targets": [
-        {"refId": "A", "expr": "topk(10, sum by (short_query) (pg_stat_statements_top_total_exec_time_ms{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}) or sum by (query) (top_sql_performance_total_time{instance=~\"${INSTANCE_VAR}\"}))", "legendFormat": "{{short_query}}{{query}}"}
+        {"refId": "A", "expr": "topk(10, sum by (queryid, short_query) (pg_stat_statements_top_total_exec_time_ms{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}))", "legendFormat": "{{queryid}} | {{short_query}}"}
       ]
     },
     {
       "type": "timeseries",
       "title": "Top SQL Mean Exec Time (ms)",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 74},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 61},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
       "targets": [
-        {"refId": "A", "expr": "topk(10, avg by (short_query) (pg_stat_statements_top_mean_exec_time_ms{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}) or avg by (query) (top_sql_statements_mean_time{instance=~\"${INSTANCE_VAR}\"}))", "legendFormat": "{{short_query}}{{query}}"}
+        {"refId": "A", "expr": "topk(10, avg by (queryid, short_query) (pg_stat_statements_top_mean_exec_time_ms{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}))", "legendFormat": "{{queryid}} | {{short_query}}"}
       ]
     },
     {
-      "type": "timeseries",
+      "type": "table",
       "title": "Top SQL Rows Processed",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 82},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 61},
       "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
       "targets": [
-        {"refId": "A", "expr": "topk(10, sum by (short_query) (pg_stat_statements_top_rows_processed{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}))", "legendFormat": "{{short_query}}"}
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Top SQL Calls (TopK)",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 82},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [
-        {"refId": "A", "expr": "topk(10, sum by (short_query) (pg_stat_statements_top_calls{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}))", "legendFormat": "{{short_query}}"}
-      ]
-    },
-    {
-      "type": "row",
-      "title": "Table Bloat (Optional Metrics)",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 90},
-      "collapsed": false
-    },
-    {
-      "type": "timeseries",
-      "title": "Table Bloat (%)",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 91},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [
-        {"refId": "A", "expr": "topk(10, table_bloat_bloat_size_percent{instance=~\"${INSTANCE_VAR}\"})", "legendFormat": "{{schema}}.{{table}}"}
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Table Bloat Size (KB)",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 91},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [
-        {"refId": "A", "expr": "topk(10, table_bloat_bloat_size_kb{instance=~\"${INSTANCE_VAR}\"})", "legendFormat": "{{schema}}.{{table}}"}
+        {"refId": "A", "expr": "topk(20, sum by (queryid, short_query) (pg_stat_statements_top_rows_processed{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}))", "instant": true, "format": "table"}
       ]
     }
   ]
@@ -626,7 +513,7 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "${GRAFANA_ALLOW_SIGNUP}"
       GF_SECURITY_COOKIE_SECURE: "${GRAFANA_COOKIE_SECURE}"
       GF_SECURITY_COOKIE_SAMESITE: ${GRAFANA_COOKIE_SAMESITE}
-      GF_INSTALL_PLUGINS: "${GRAFANA_INSTALL_PLUGINS}"
+      GF_INSTALL_PLUGINS: "${GRAFANA_EFFECTIVE_PLUGINS}"
     volumes:
       - ${GRAFANA_DATA_DIR}:/var/lib/grafana
       - ${BASE_DIR}/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -646,6 +533,7 @@ services:
       - --web.listen-address=:${PROM_PORT}
     volumes:
       - ${PROM_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ${PROM_DIR}/recording-rules.yml:/etc/prometheus/recording-rules.yml:ro
       - ${PROM_DATA_DIR}:/prometheus
     networks: [monitoring]
 
