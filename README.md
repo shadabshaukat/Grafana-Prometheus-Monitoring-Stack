@@ -38,6 +38,7 @@ This repository is refactored so all operational scripts read from `.env` (singl
 ├── generate_configs.sh
 ├── deploy_stack.sh
 ├── check_grafana_bindings.sh
+├── discover_oci_dbsystems.sh
 ├── start_stack.sh
 ├── stop_stack.sh
 ├── destroy_stack.sh
@@ -220,6 +221,7 @@ Notes:
 
 - If `OCI_PRIVATE_KEY_PEM_SNIPPET` is left as placeholder and `OCI_PRIVATE_KEY_FILE` exists, generator reads key content from file automatically.
 - Generator also mounts `OCI_CONFIG_FILE` and `OCI_PRIVATE_KEY_FILE` into Grafana container at `OCI_CONTAINER_CONFIG_PATH` / `OCI_CONTAINER_PRIVATE_KEY_PATH`.
+- `OCI_CONFIG_PROFILE` is sanitized automatically (trims accidental trailing `:` or `/` and brackets), helping avoid profile values such as `DEFAULT/:`.
 - Keep `\\n` escaped if setting the full key inline in `.env`.
 
 Fail-fast behavior:
@@ -227,15 +229,53 @@ Fail-fast behavior:
 - If `OCI_DS_ENABLED=true` and `OCI_CONFIG_FILE` is missing, generation stops with an explicit error.
 - If key is still placeholder and no valid key file is found, generation stops with an explicit error.
 
-### Optional: use Prometheus as single datasource for OCI metrics
+### Built-in OCI metrics collector (OCI → Prometheus)
 
-If you prefer one datasource in Grafana, you can ingest OCI metrics into Prometheus (for example via an OCI/OTel collector exporter pipeline) and append scrape jobs using:
+This stack can generate and run a built-in OCI metrics collector container (`oci_metrics_collector`) that exposes `/metrics` for Prometheus.
+
+Enable it in `.env`:
+
+```env
+OCI_PROM_ENABLED=true
+OCI_PROM_COLLECTOR_IMAGE=python:3.11-slim
+OCI_PROM_JOB_NAME=oci_metrics
+OCI_PROM_PORT=9160
+OCI_PROM_POLL_SECONDS=60
+OCI_PROM_NAMESPACES=oci_postgresql
+OCI_PROM_RESOURCE_GROUP=${OCI_PG_RESOURCE_GROUP}
+OCI_PROM_REGION=ap-tokyo-1
+OCI_PROM_COMPARTMENT_OCID=ocid1.compartment.oc1..<REPLACE_ME>
+OCI_PROM_DBSYSTEM_IDS=ocid1.postgresqlbs.oc1..<DB1>,ocid1.postgresqlbs.oc1..<DB2>
+OCI_PROM_AUTO_DISCOVER_DBSYSTEMS=false
+OCI_PROM_DISCOVER_DBSYSTEMS_ON_DEPLOY=false
+OCI_PROM_MAX_METRICS=200
+OCI_PROM_METRIC_REGEX=.*
+```
+
+Behavior:
+
+- If `OCI_PROM_SCRAPE_TARGETS` is empty, Prometheus auto-targets the built-in collector as `oci_metrics_collector:${OCI_PROM_PORT}`.
+- `OCI_PROM_DBSYSTEM_IDS` supports multiple DB Systems as a comma-separated list.
+- If `OCI_PROM_AUTO_DISCOVER_DBSYSTEMS=true`, the collector learns new DBSystem resource IDs while scraping.
+- If `OCI_PROM_DISCOVER_DBSYSTEMS_ON_DEPLOY=true`, config generation runs `discover_oci_dbsystems.sh` and merges discovered IDs with `OCI_PROM_DBSYSTEM_IDS` for that deploy.
+
+Manual discovery command:
+
+```bash
+bash ./discover_oci_dbsystems.sh
+```
+
+### Optional: additional Prometheus scrape config
+
+If you want to append extra custom scrape jobs, use:
 
 ```env
 PROM_ADDITIONAL_SCRAPE_CONFIG=/opt/observability-stack/prometheus/extra-scrape-config.yml
 ```
 
 The generator appends this file to `prometheus.yml` when set.
+
+When enabled, the unified dashboard includes an **All Metrics via Prometheus Bridge** panel filtered by region/compartment/dbsystem/metric-regex variables.
 
 ### Unified dashboard (single pane of glass)
 
