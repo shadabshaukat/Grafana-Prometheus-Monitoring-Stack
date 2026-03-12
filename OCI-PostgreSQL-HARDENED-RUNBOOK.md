@@ -8,6 +8,10 @@ This runbook provides a production-style setup for:
 - Firewall guidance
 - Unified dashboard strategy for OCI PostgreSQL (DB OCI Stats + SQL Query Monitoring)
 
+> **Important (current build):** This repository is now **env-driven**.  
+> The operational source of truth is: `.env`, `lib/common.sh`, and these scripts:  
+> `generate_configs.sh`, `deploy_stack.sh`, `destroy_stack.sh`, `rotate_certs.sh`, `smoke_test.sh`.
+
 ---
 
 ## 1) Hardening recommendations
@@ -663,3 +667,71 @@ sudo /opt/observability-stack/rotate_certs.sh 180
 ```bash
 sudo /opt/observability-stack/smoke_test.sh
 ```
+
+---
+
+## 10) Troubleshooting: `curl: (22) ... 502` during deploy
+
+If you see this at deploy step `[5/6]`:
+
+```text
+curl: (22) The requested URL returned error: 502
+```
+
+It usually means **NGINX is up but Grafana is still starting** (startup race).  
+This is expected sometimes on first pull/start.
+
+### What has been improved
+
+- `deploy_stack.sh` now has retry-based health checks.
+- It waits for Grafana via NGINX using:
+  - `HEALTHCHECK_MAX_RETRIES`
+  - `HEALTHCHECK_SLEEP_SECONDS`
+- On failure, it prints recent NGINX/Grafana logs automatically.
+
+### Tune retries in `.env`
+
+```env
+HEALTHCHECK_MAX_RETRIES=30
+HEALTHCHECK_SLEEP_SECONDS=2
+```
+
+For slow hosts, increase to e.g.:
+
+```env
+HEALTHCHECK_MAX_RETRIES=60
+HEALTHCHECK_SLEEP_SECONDS=3
+```
+
+### Manual checks
+
+```bash
+sudo docker compose -f /opt/observability-stack/docker-compose.yaml ps
+sudo docker logs --tail 120 nginx-grafana
+sudo docker logs --tail 120 grafana
+curl -kI https://127.0.0.1:8443/login
+```
+
+---
+
+## 11) Recommended improvements
+
+1. **Security & secrets**
+   - Move DB DSNs and Grafana admin password from `.env` to a secrets backend (OCI Vault / Docker secrets).
+   - Restrict TLS port source CIDRs (VPN/jump-host only).
+
+2. **Reliability**
+   - Pin image versions (avoid `latest`) and patch on schedule.
+   - Add container healthchecks in compose (Grafana, NGINX, Prometheus, exporters).
+
+3. **Observability maturity**
+   - Add Prometheus alert rules + Alertmanager routing.
+   - Add Grafana contact points and alert policies for lag, deadlocks, exporter down, high rollback ratio.
+
+4. **Performance and scale**
+   - Split exporters by workload tiers (OLTP/reporting/analytics).
+   - Add recording rules for expensive PromQL panels.
+
+5. **Ops hygiene**
+   - Add CI checks: `bash -n`, `shellcheck`, and config generation smoke test.
+   - Create `make` targets (`make deploy`, `make destroy`, `make test`) for operator consistency.

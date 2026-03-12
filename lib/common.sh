@@ -65,6 +65,8 @@ load_env() {
   : "${CERT_OU:=Platform}"
   : "${CERT_CN:=grafana.local}"
   : "${RUN_SMOKE_TEST_AFTER_DEPLOY:=true}"
+  : "${HEALTHCHECK_MAX_RETRIES:=30}"
+  : "${HEALTHCHECK_SLEEP_SECONDS:=2}"
 
   NGINX_CONF_DIR="$BASE_DIR/nginx/conf.d"
   CERT_DIR="$BASE_DIR/nginx/certs"

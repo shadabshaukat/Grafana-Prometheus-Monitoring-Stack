@@ -40,8 +40,38 @@ firewall_open_ports
 
 log "[5/6] Running quick health checks..."
 compose_cmd ps
-curl -ksSf "https://${LOCAL_TEST_HOST}:${NGINX_HTTPS_PORT}/login" >/dev/null
-curl -sSf "http://${LOCAL_TEST_HOST}:${PROM_PORT}/-/ready" >/dev/null
+
+health_ok=false
+for i in $(seq 1 "$HEALTHCHECK_MAX_RETRIES"); do
+  if curl -ksSf "https://${LOCAL_TEST_HOST}:${NGINX_HTTPS_PORT}/login" >/dev/null; then
+    health_ok=true
+    break
+  fi
+  log "Waiting for Grafana via NGINX... (${i}/${HEALTHCHECK_MAX_RETRIES})"
+  sleep "$HEALTHCHECK_SLEEP_SECONDS"
+done
+
+if [[ "$health_ok" != "true" ]]; then
+  warn "Grafana endpoint did not become ready in time. Showing recent logs:"
+  docker logs --tail 80 "$NGINX_CONTAINER_NAME" || true
+  docker logs --tail 80 "$GRAFANA_CONTAINER_NAME" || true
+  die "Health check failed: https://${LOCAL_TEST_HOST}:${NGINX_HTTPS_PORT}/login"
+fi
+
+prom_ok=false
+for i in $(seq 1 "$HEALTHCHECK_MAX_RETRIES"); do
+  if curl -sSf "http://${LOCAL_TEST_HOST}:${PROM_PORT}/-/ready" >/dev/null; then
+    prom_ok=true
+    break
+  fi
+  log "Waiting for Prometheus... (${i}/${HEALTHCHECK_MAX_RETRIES})"
+  sleep "$HEALTHCHECK_SLEEP_SECONDS"
+done
+
+if [[ "$prom_ok" != "true" ]]; then
+  docker logs --tail 80 "$PROM_CONTAINER_NAME" || true
+  die "Health check failed: http://${LOCAL_TEST_HOST}:${PROM_PORT}/-/ready"
+fi
 
 if [[ "$RUN_SMOKE_TEST_AFTER_DEPLOY" == "true" && -f "$SMOKE_SCRIPT" ]]; then
   log "Running smoke test script..."
