@@ -173,79 +173,11 @@ providers:
       path: /var/lib/grafana/dashboards
 EOF_DP
 
-write_file "$GRAFANA_DASH_DIR/oci-postgresql-metrics.json" <<EOF_OCI_DASH
-{
-  "title": "OCI PostgreSQL Metrics (OCI Monitoring)",
-  "uid": "oci-postgresql-metrics",
-  "schemaVersion": 39,
-  "version": 1,
-  "refresh": "30s",
-  "time": {"from": "now-6h", "to": "now"},
-  "tags": ["oci", "postgresql", "monitoring"],
-  "templating": {
-    "list": [
-      {
-        "name": "compartment",
-        "type": "textbox",
-        "label": "Compartment OCID",
-        "query": "${OCI_PG_COMPARTMENT_OCID}",
-        "current": {"text": "${OCI_PG_COMPARTMENT_OCID}", "value": "${OCI_PG_COMPARTMENT_OCID}"}
-      },
-      {
-        "name": "resourceGroup",
-        "type": "textbox",
-        "label": "Resource Group",
-        "query": "${OCI_PG_RESOURCE_GROUP}",
-        "current": {"text": "${OCI_PG_RESOURCE_GROUP}", "value": "${OCI_PG_RESOURCE_GROUP}"}
-      }
-    ]
-  },
-  "panels": [
-    {
-      "type": "timeseries",
-      "title": "CPU Utilization (%)",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
-      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
-      "targets": [{"refId": "A", "queryText": "CpuUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
-    },
-    {
-      "type": "timeseries",
-      "title": "Memory Utilization (%)",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
-      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
-      "targets": [{"refId": "A", "queryText": "MemoryUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
-    },
-    {
-      "type": "timeseries",
-      "title": "Storage Utilization (%)",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
-      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
-      "targets": [{"refId": "A", "queryText": "StorageUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
-    },
-    {
-      "type": "timeseries",
-      "title": "Connections",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
-      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
-      "targets": [{"refId": "A", "queryText": "DatabaseConnections[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
-    },
-    {
-      "type": "timeseries",
-      "title": "Read IOPS",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
-      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
-      "targets": [{"refId": "A", "queryText": "ReadIOPS[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
-    },
-    {
-      "type": "timeseries",
-      "title": "Write IOPS",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
-      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
-      "targets": [{"refId": "A", "queryText": "WriteIOPS[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
-    }
-  ]
-}
-EOF_OCI_DASH
+LEGACY_OCI_DASH="$GRAFANA_DASH_DIR/oci-postgresql-metrics.json"
+if [[ -f "$LEGACY_OCI_DASH" ]]; then
+  rm -f "$LEGACY_OCI_DASH"
+  log "Removed legacy dashboard: $LEGACY_OCI_DASH"
+fi
 
 ALL_VAR='$__all'
 INSTANCE_VAR='$instance'
@@ -278,7 +210,7 @@ write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_UNIFIED_DA
         "type": "query",
         "label": "Database",
         "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-        "query": "label_values(datname)",
+        "query": "label_values(pg_stat_database_xact_commit{instance=~\"${INSTANCE_VAR}\"}, datname)",
         "refresh": 1,
         "includeAll": true,
         "multi": false,
@@ -395,21 +327,21 @@ write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_UNIFIED_DA
       "title": "OCI CPU Utilization (%)",
       "gridPos": {"h": 8, "w": 8, "x": 0, "y": 22},
       "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
-      "targets": [{"refId": "A", "queryText": "CpuUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
+      "targets": [{"refId": "A", "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"}, "queryText": "CpuUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
     },
     {
       "type": "timeseries",
       "title": "OCI Memory Utilization (%)",
       "gridPos": {"h": 8, "w": 8, "x": 8, "y": 22},
       "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
-      "targets": [{"refId": "A", "queryText": "MemoryUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
+      "targets": [{"refId": "A", "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"}, "queryText": "MemoryUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
     },
     {
       "type": "timeseries",
       "title": "OCI Connections",
       "gridPos": {"h": 8, "w": 8, "x": 16, "y": 22},
       "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
-      "targets": [{"refId": "A", "queryText": "DatabaseConnections[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
+      "targets": [{"refId": "A", "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"}, "queryText": "DatabaseConnections[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
     },
     {
       "type": "timeseries",
@@ -417,8 +349,8 @@ write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_UNIFIED_DA
       "gridPos": {"h": 8, "w": 24, "x": 0, "y": 30},
       "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
       "targets": [
-        {"refId": "A", "queryText": "ReadIOPS[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"},
-        {"refId": "B", "queryText": "WriteIOPS[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}
+        {"refId": "A", "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"}, "queryText": "ReadIOPS[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"},
+        {"refId": "B", "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"}, "queryText": "WriteIOPS[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}
       ]
     }
   ]
