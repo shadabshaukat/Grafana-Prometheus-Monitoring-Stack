@@ -1,19 +1,18 @@
-# OCI PostgreSQL Observability Stack
+# PostgreSQL Observability Stack (Prometheus + Grafana)
 
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Oracle%20Linux%20%7C%20RHEL%20%7C%20Ubuntu-blue)](#platform-support)
-[![Runtime](https://img.shields.io/badge/runtime-Docker%20Compose-2496ED)](#architecture)
-[![TLS](https://img.shields.io/badge/TLS-self--signed-orange)](#tls-and-certificate-rotation)
+This stack is now intentionally **Prometheus-only** for data collection and visualization.
 
-Production-style, environment-parameterized observability stack for OCI managed PostgreSQL using:
+Included components:
+- Grafana
+- Prometheus
+- postgres_exporter (multi-endpoint)
+- NGINX TLS reverse proxy
 
-- **Grafana** (dashboards + visualization)
-- **Prometheus** (metrics collection)
-- **postgres_exporter** (PostgreSQL metrics)
-- **NGINX** (TLS reverse proxy)
+All operational scripts are environment-driven via `.env` (single source of truth).
 
-This repository is refactored so all operational scripts read from `.env` (single source of truth) and support deployment on:
+This repository supports local and server deployments with the same workflow:
 
-- macOS (local development)
+- macOS (Docker Desktop)
 - Oracle Linux / RHEL
 - Ubuntu Linux
 
@@ -21,10 +20,10 @@ This repository is refactored so all operational scripts read from `.env` (singl
 
 ## Architecture
 
-- `nginx` exposed on `${NGINX_HTTPS_PORT}` (default `8443`) and `${NGINX_HTTP_PORT}` redirect.
-- `grafana` private behind NGINX.
-- `prometheus` bound to `${PROM_BIND_ADDRESS}:${PROM_PORT}` (default localhost only).
-- one or more `postgres_exporter_*` services, each pointing to different DB DSN.
+- `nginx` is exposed on `${NGINX_HTTPS_PORT}` (default `8443`) and `${NGINX_HTTP_PORT}` (`80` redirect).
+- `grafana` is private behind NGINX.
+- `prometheus` is bound to `${PROM_BIND_ADDRESS}:${PROM_PORT}` (default localhost only).
+- one or more `postgres_exporter_*` services scrape PostgreSQL endpoints defined by DSN.
 
 ---
 
@@ -35,10 +34,10 @@ This repository is refactored so all operational scripts read from `.env` (singl
 ├── .env
 ├── .env.example
 ├── README.md
+├── PostgreSQL-HARDENED-RUNBOOK.md
 ├── generate_configs.sh
 ├── deploy_stack.sh
 ├── check_grafana_bindings.sh
-├── discover_oci_dbsystems.sh
 ├── start_stack.sh
 ├── stop_stack.sh
 ├── destroy_stack.sh
@@ -52,11 +51,10 @@ This repository is refactored so all operational scripts read from `.env` (singl
 
 ## Quick start
 
-### 1) Copy and edit environment file
-
 ```bash
 cp .env.example .env
 vi .env
+sudo ./deploy_stack.sh
 ```
 
 Set at minimum:
@@ -67,107 +65,84 @@ Set at minimum:
 - `EXPORTER_TARGETS`
 - `EXPORTER_N_NAME` / `EXPORTER_N_DSN`
 
-### 2) One-command deploy
+Example (2 exporters):
 
-```bash
-sudo ./deploy_stack.sh
+```env
+EXPORTER_COUNT=2
+EXPORTER_1_NAME=postgres_exporter_primary
+EXPORTER_1_DSN=postgresql://monitor_user:REPLACE_ME@10.10.1.82:5432/postgres?sslmode=require
+EXPORTER_2_NAME=postgres_exporter_reporting
+EXPORTER_2_DSN=postgresql://monitor_user:REPLACE_ME@10.10.1.83:5432/postgres?sslmode=require
+EXPORTER_TARGETS=postgres_exporter_primary:9187,postgres_exporter_reporting:9187
 ```
 
-### 3) Access Grafana
+Access Grafana:
 
 ```text
-https://<host-ip>:${NGINX_HTTPS_PORT}
+https://<host-ip>:8443
 ```
-
-Default from `.env`: `https://<host-ip>:8443`
 
 ---
 
-## One-command operations
-
-### Deploy
+## Operations
 
 ```bash
 sudo ./deploy_stack.sh
-```
-
-### Start (without full regenerate/redeploy)
-
-```bash
 sudo ./start_stack.sh
-```
-
-### Stop
-
-```bash
 sudo ./stop_stack.sh
-```
-
-### Destroy (keep data)
-
-```bash
 sudo ./destroy_stack.sh
-```
-
-### Destroy (purge data)
-
-```bash
 sudo ./destroy_stack.sh --purge-data
-```
-
-### Rotate self-signed certificate
-
-```bash
-sudo ./rotate_certs.sh          # uses CERT_DAYS from .env
-sudo ./rotate_certs.sh 180      # custom days
-```
-
-### Post-rebuild smoke tests
-
-```bash
+sudo ./rotate_certs.sh
 sudo ./smoke_test.sh
-```
-
-### Manual Grafana datasource-binding check
-
-```bash
 sudo ./check_grafana_bindings.sh
 ```
 
-By default, `deploy_stack.sh` runs this checker automatically when:
+Notes:
+
+- `deploy_stack.sh` regenerates configs, ensures certs, starts containers, applies firewall rules, and runs health checks.
+- `check_grafana_bindings.sh` verifies dashboard panels explicitly use the Prometheus datasource UID from `.env`.
+
+By default, deploy also runs smoke test and Grafana datasource-binding validation:
 
 ```env
+RUN_SMOKE_TEST_AFTER_DEPLOY=true
 RUN_GRAFANA_BINDING_CHECK_AFTER_DEPLOY=true
 ```
 
 ---
 
-## Multi-database postgres_exporter scaling
+## What gets generated
 
-This stack supports multiple PostgreSQL endpoints via environment variables.
+`generate_configs.sh` writes:
 
-### Add one more exporter
+- Prometheus config with:
+  - `prometheus` scrape job
+  - `postgres_exporters` scrape job
+- Grafana Prometheus datasource provisioning
+- Unified PostgreSQL dashboard (`postgresql-unified-insights.json`)
+- NGINX TLS reverse proxy config
+- `docker-compose.yaml` with nginx, grafana, prometheus, and N exporters
 
-1. Increase exporter count:
+Optional additional scrape jobs can be appended by setting:
+
+```env
+PROM_ADDITIONAL_SCRAPE_CONFIG=/opt/observability-stack/prometheus/extra-scrape-config.yml
+```
+
+---
+
+## Multi-exporter scaling
+
+Increase exporter count and add DSNs:
 
 ```env
 EXPORTER_COUNT=3
-```
-
-2. Add new exporter name + DSN:
-
-```env
 EXPORTER_3_NAME=postgres_exporter_analytics
 EXPORTER_3_DSN=postgresql://monitor_user:REPLACE_ME@10.10.1.84:5432/postgres?sslmode=require
-```
-
-3. Add scrape target:
-
-```env
 EXPORTER_TARGETS=postgres_exporter_primary:9187,postgres_exporter_reporting:9187,postgres_exporter_analytics:9187
 ```
 
-4. Redeploy:
+Then redeploy:
 
 ```bash
 sudo ./deploy_stack.sh
@@ -175,203 +150,87 @@ sudo ./deploy_stack.sh
 
 ---
 
-## Dashboard strategy (OCI managed PostgreSQL)
+## Dashboard scope
 
-Build a **single unified dashboard** with two sections:
+Generated dashboard: `postgresql-unified-insights.json`
 
-1. **DB OCI Stats**
-   - connections, TPS, cache hit %, deadlocks, replication lag, checkpoint pressure
-   - optional OCI plugin metrics (CPU, memory, storage throughput/IOPS)
+Includes core PostgreSQL views such as:
 
-2. **SQL Query Monitoring** (RDS Performance Insights style)
-   - Top SQL by total/mean exec time
-   - Top SQL by call volume
-   - rollback ratio
-   - temp bytes/txn
-   - dead tuple ratio by table
-   - autovacuum cadence
+- availability (`pg_up`)
+- active connections
+- TPS (commit + rollback)
+- cache hit ratio
+- deadlocks rate
+- database size
+- top SQL by total execution time and call volume (via `pg_stat_statements` custom query)
 
-### OCI Metrics datasource auto-provisioning
+Dashboard variables:
 
-This repo now provisions **Oracle Cloud Infrastructure Metrics** datasource (`oci-metrics-datasource`) when `OCI_DS_ENABLED=true`.
-
-Set these values in `.env`:
-
-```env
-OCI_DS_ENABLED=true
-OCI_DS_NAME="Oracle Cloud Infrastructure Metrics"
-OCI_DS_UID=oci-metrics
-OCI_CONFIG_PROFILE=DEFAULT
-# Host paths (must exist on the VM host)
-OCI_CONFIG_FILE=/home/opc/.oci/config
-OCI_PRIVATE_KEY_FILE=/home/opc/.oci/priv.key
-# Container paths used by Grafana datasource
-OCI_CONTAINER_CONFIG_PATH=/etc/grafana/oci/config
-OCI_CONTAINER_PRIVATE_KEY_PATH=/etc/grafana/oci/priv.key
-OCI_TENANCY_OCID=ocid1.tenancy.oc1..<REPLACE_ME>
-OCI_USER_OCID=ocid1.user.oc1..<REPLACE_ME>
-OCI_REGION=ap-tokyo-1
-OCI_FINGERPRINT=aa:bb:cc:...
-OCI_PRIVATE_KEY_PEM_SNIPPET="-----BEGIN PRIVATE KEY-----\nPASTE_PRIVATE_KEY_CONTENT_HERE\n-----END PRIVATE KEY-----"
-OCI_PG_COMPARTMENT_OCID=ocid1.compartment.oc1..<REPLACE_ME>
-OCI_PG_RESOURCE_GROUP=postgresql
-```
-
-Notes:
-
-- If `OCI_PRIVATE_KEY_PEM_SNIPPET` is left as placeholder and `OCI_PRIVATE_KEY_FILE` exists, generator reads key content from file automatically.
-- Generator also mounts `OCI_CONFIG_FILE` and `OCI_PRIVATE_KEY_FILE` into Grafana container at `OCI_CONTAINER_CONFIG_PATH` / `OCI_CONTAINER_PRIVATE_KEY_PATH`.
-- `OCI_CONFIG_PROFILE` is sanitized automatically (trims accidental trailing `:` or `/` and brackets), helping avoid profile values such as `DEFAULT/:`.
-- Keep `\\n` escaped if setting the full key inline in `.env`.
-
-Fail-fast behavior:
-
-- If `OCI_DS_ENABLED=true` and `OCI_CONFIG_FILE` is missing, generation stops with an explicit error.
-- If key is still placeholder and no valid key file is found, generation stops with an explicit error.
-
-### Built-in OCI metrics collector (OCI → Prometheus)
-
-This stack can generate and run a built-in OCI metrics collector container (`oci_metrics_collector`) that exposes `/metrics` for Prometheus.
-
-Enable it in `.env`:
-
-```env
-OCI_PROM_ENABLED=true
-OCI_PROM_COLLECTOR_IMAGE=python:3.11-slim
-OCI_PROM_JOB_NAME=oci_metrics
-OCI_PROM_PORT=9160
-OCI_PROM_POLL_SECONDS=60
-OCI_PROM_NAMESPACES=oci_postgresql
-OCI_PROM_RESOURCE_GROUP=${OCI_PG_RESOURCE_GROUP}
-OCI_PROM_REGION=ap-tokyo-1
-OCI_PROM_COMPARTMENT_OCID=ocid1.compartment.oc1..<REPLACE_ME>
-OCI_PROM_DBSYSTEM_IDS=ocid1.postgresqlbs.oc1..<DB1>,ocid1.postgresqlbs.oc1..<DB2>
-OCI_PROM_AUTO_DISCOVER_DBSYSTEMS=false
-OCI_PROM_DISCOVER_DBSYSTEMS_ON_DEPLOY=false
-OCI_PROM_MAX_METRICS=200
-OCI_PROM_METRIC_REGEX=.*
-```
-
-Behavior:
-
-- If `OCI_PROM_SCRAPE_TARGETS` is empty, Prometheus auto-targets the built-in collector as `oci_metrics_collector:${OCI_PROM_PORT}`.
-- `OCI_PROM_DBSYSTEM_IDS` supports multiple DB Systems as a comma-separated list.
-- If `OCI_PROM_AUTO_DISCOVER_DBSYSTEMS=true`, the collector learns new DBSystem resource IDs while scraping.
-- If `OCI_PROM_DISCOVER_DBSYSTEMS_ON_DEPLOY=true`, config generation runs `discover_oci_dbsystems.sh` and merges discovered IDs with `OCI_PROM_DBSYSTEM_IDS` for that deploy.
-
-Manual discovery command:
-
-```bash
-bash ./discover_oci_dbsystems.sh
-```
-
-### Optional: additional Prometheus scrape config
-
-If you want to append extra custom scrape jobs, use:
-
-```env
-PROM_ADDITIONAL_SCRAPE_CONFIG=/opt/observability-stack/prometheus/extra-scrape-config.yml
-```
-
-The generator appends this file to `prometheus.yml` when set.
-
-When enabled, the unified dashboard includes an **All Metrics via Prometheus Bridge** panel filtered by region/compartment/dbsystem/metric-regex variables.
-
-### Unified dashboard (single pane of glass)
-
-The generator creates:
-
-- `${BASE_DIR}/grafana/dashboards/postgresql-unified-insights.json`
-
-`postgresql-unified-insights.json` is now **bootstrapped directly by the stack** (generated from `generate_configs.sh`) and does **not** require importing/migrating an external JSON at runtime.
-
-It includes:
-
-- PostgreSQL Prometheus panels (availability, connections, TPS, cache hit, deadlocks, DB size, top SQL)
-- OCI Monitoring panels (CPU, memory, connections, read/write IOPS)
-
-Datasource mapping is automatic:
-
-- Prometheus panels use `GRAFANA_DS_UID`
-- OCI panels use `OCI_DS_UID`
-
-Panels include (OCI Monitoring datasource):
-
-- CPU Utilization
-- Memory Utilization
-- Database Connections
-- Read IOPS
-- Write IOPS
-
-### Tenancy-wide strategy (multi-region/multi-compartment)
-
-Recommended options:
-
-1. **Native OCI datasource path (current default)**
-   - Keep unified dashboard.
-   - Use dashboard variables (`compartment`, `resourceGroup`) to switch scope quickly.
-   - Add one OCI datasource per region when you need cross-region views in Grafana.
-
-2. **Prometheus-centric path (scale-friendly)**
-   - Ingest OCI metrics into Prometheus (via OTel/collector pipeline).
-   - Add `region` + `compartment` labels at ingestion time.
-   - Use one datasource (`prometheus`) for tenancy-wide, multi-region panels.
+- `instance` (exporter instance)
+- `datname` (database)
 
 ---
 
 ## TLS and certificate rotation
 
-- Initial cert is generated automatically by `deploy_stack.sh` if missing.
-- Rotate at any time with `rotate_certs.sh`.
-- Script creates timestamped backups and restarts NGINX.
+- Initial self-signed cert is generated automatically during deploy (if missing).
+- Rotate at any time:
+
+```bash
+sudo ./rotate_certs.sh
+# or custom validity days
+sudo ./rotate_certs.sh 180
+```
+
+`rotate_certs.sh` keeps timestamped backups of previous cert/key and restarts NGINX.
 
 ---
 
 ## Platform support
 
-### macOS
-- Docker Desktop recommended.
-- Firewall steps are skipped automatically unless configured otherwise.
+- macOS (Docker Desktop)
+- Oracle Linux / RHEL (`firewalld` automation when enabled)
+- Ubuntu (`ufw` automation when enabled)
 
-### Oracle Linux / RHEL
-- `firewalld` automation supported (`firewall-cmd`).
-
-### Ubuntu
-- `ufw` automation supported when available.
-
-Use `.env` to disable firewall automation:
+Disable firewall automation if required:
 
 ```env
 ENABLE_FIREWALL=false
 ```
 
+Firewall behavior is auto-detected in scripts:
+
+- `firewalld` (Oracle Linux / RHEL)
+- `ufw` (Ubuntu)
+- skipped when unavailable or disabled
+
 ---
 
 ## Security notes
 
-- Replace demo passwords/DSNs before production use.
-- Prefer secret stores (Vault/OCI Vault/K8s secrets) over plain `.env`.
-- Restrict exposed ports and source CIDRs.
-- Pin image versions and patch regularly.
+- Replace demo credentials and DSN passwords before production.
+- Prefer external secret stores over plaintext `.env` in production.
+- Keep Prometheus localhost-bound unless remote access is required.
+- Pin image versions instead of floating `latest` in hardened environments.
 
 ---
 
 ## Troubleshooting
 
-### Verify generated compose and config
+Regenerate stack configs:
 
 ```bash
 sudo ./generate_configs.sh --force
 cat "$(grep '^BASE_DIR=' .env | cut -d'=' -f2)/docker-compose.yaml"
 ```
 
-### Check services
+Check container/service health:
 
 ```bash
 sudo ./smoke_test.sh
 ```
 
-### Check Prometheus targets
+Inspect Prometheus targets:
 
 ```bash
 curl -s http://127.0.0.1:9090/api/v1/targets | jq '.data.activeTargets[] | {scrapeUrl,health,lastError}'
@@ -379,6 +238,8 @@ curl -s http://127.0.0.1:9090/api/v1/targets | jq '.data.activeTargets[] | {scra
 
 ---
 
-## License / Usage
+## Notes
 
-Internal project template for rapid PostgreSQL observability deployment.
+- Default Grafana datasource is Prometheus (`GRAFANA_DS_UID=prometheus`).
+- No additional datasource plugins are required.
+- Keep Prometheus host bind on localhost unless you explicitly want remote access.

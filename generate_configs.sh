@@ -7,45 +7,6 @@ source "$ROOT_DIR/lib/common.sh"
 
 load_env
 
-escape_newlines() {
-  awk '{printf "%s\\n", $0}'
-}
-
-sanitize_oci_profile() {
-  local raw="$1"
-  printf '%s' "$raw" | tr -d '[:space:][]' | sed -E 's#[:/]+$##'
-}
-
-bool_true() {
-  [[ "${1:-false}" == "true" ]]
-}
-
-normalize_csv() {
-  local raw="${1:-}"
-  printf '%s' "$raw" | tr -d '[:space:]' | sed -E 's/,+/,/g; s/^,+//; s/,+$//'
-}
-
-merge_csv_values() {
-  local current_csv new_csv
-  current_csv="$(normalize_csv "${1:-}")"
-  new_csv="$(normalize_csv "${2:-}")"
-  awk -v a="$current_csv" -v b="$new_csv" 'BEGIN {
-    n = split(a, A, ",");
-    for (i = 1; i <= n; i++) if (A[i] != "" && !(A[i] in seen)) { seen[A[i]] = 1; out[++k] = A[i] }
-    m = split(b, B, ",");
-    for (i = 1; i <= m; i++) if (B[i] != "" && !(B[i] in seen)) { seen[B[i]] = 1; out[++k] = B[i] }
-    for (i = 1; i <= k; i++) {
-      printf "%s%s", out[i], (i < k ? "," : "")
-    }
-  }'
-}
-
-discover_oci_dbsystem_ids() {
-  local discover_script="$ROOT_DIR/discover_oci_dbsystems.sh"
-  [[ -f "$discover_script" ]] || return 0
-  bash "$discover_script"
-}
-
 FORCE="false"
 if [[ "${1:-}" == "--force" ]]; then
   FORCE="true"
@@ -72,36 +33,7 @@ write_file() {
 mkdir -p \
   "$NGINX_CONF_DIR" "$CERT_DIR" "$PROM_DIR" "$PGEXP_DIR" \
   "$GRAFANA_DS_DIR" "$GRAFANA_DASH_PROV_DIR" "$GRAFANA_DASH_DIR" \
-  "$GRAFANA_DATA_DIR" "$PROM_DATA_DIR" "$BASE_DIR/oci-metrics-collector"
-
-OCI_CONFIG_PROFILE_EFFECTIVE="$(sanitize_oci_profile "$OCI_CONFIG_PROFILE")"
-if bool_true "$OCI_DS_ENABLED" || bool_true "$OCI_PROM_ENABLED"; then
-  if [[ -z "$OCI_CONFIG_PROFILE_EFFECTIVE" ]]; then
-    die "OCI_CONFIG_PROFILE is empty/invalid after sanitization: '$OCI_CONFIG_PROFILE'"
-  fi
-fi
-
-if bool_true "$OCI_PROM_ENABLED"; then
-  [[ -f "$OCI_CONFIG_FILE" ]] || die "OCI_PROM_ENABLED=true but OCI_CONFIG_FILE not found: $OCI_CONFIG_FILE"
-  [[ -f "$OCI_PRIVATE_KEY_FILE" ]] || die "OCI_PROM_ENABLED=true but OCI_PRIVATE_KEY_FILE not found: $OCI_PRIVATE_KEY_FILE"
-
-  OCI_PROM_DBSYSTEM_IDS="$(normalize_csv "$OCI_PROM_DBSYSTEM_IDS")"
-
-  if bool_true "$OCI_PROM_DISCOVER_DBSYSTEMS_ON_DEPLOY"; then
-    if discovered_ids="$(discover_oci_dbsystem_ids)"; then
-      discovered_ids="$(normalize_csv "$discovered_ids")"
-      if [[ -n "$discovered_ids" ]]; then
-        OCI_PROM_DBSYSTEM_IDS="$(merge_csv_values "$OCI_PROM_DBSYSTEM_IDS" "$discovered_ids")"
-        OCI_PROM_DBSYSTEM_ID="${OCI_PROM_DBSYSTEM_IDS%%,*}"
-        log "Resolved OCI DBSystem IDs for this generation: $OCI_PROM_DBSYSTEM_IDS"
-      else
-        warn "OCI_PROM_DISCOVER_DBSYSTEMS_ON_DEPLOY=true but no DBSystem IDs were discovered; keeping OCI_PROM_DBSYSTEM_IDS from .env"
-      fi
-    else
-      warn "OCI DBSystem discovery workflow failed; keeping OCI_PROM_DBSYSTEM_IDS from .env"
-    fi
-  fi
-fi
+  "$GRAFANA_DATA_DIR" "$PROM_DATA_DIR"
 
 if [[ "$ENABLE_CHOWN" == "true" ]]; then
   chown -R 472:472 "$GRAFANA_DATA_DIR" || true
@@ -127,237 +59,14 @@ EOF_PROM
   for t in "${exporter_targets[@]}"; do
     printf "          - %s\n" "$t" >> "$PROM_DIR/prometheus.yml"
   done
-
-  if bool_true "$OCI_PROM_ENABLED"; then
-    OCI_PROM_EFFECTIVE_TARGETS="$OCI_PROM_SCRAPE_TARGETS"
-    if [[ -z "$OCI_PROM_EFFECTIVE_TARGETS" ]]; then
-      OCI_PROM_EFFECTIVE_TARGETS="oci_metrics_collector:${OCI_PROM_PORT}"
-      log "OCI_PROM_SCRAPE_TARGETS not set; defaulting to built-in collector target: $OCI_PROM_EFFECTIVE_TARGETS"
-    fi
-
-    cat >> "$PROM_DIR/prometheus.yml" <<EOF_OCI_PROM
-
-  - job_name: ${OCI_PROM_JOB_NAME}
-    metrics_path: /metrics
-    static_configs:
-      - targets:
-EOF_OCI_PROM
-
-    IFS=',' read -r -a oci_prom_targets <<< "$OCI_PROM_EFFECTIVE_TARGETS"
-    for t in "${oci_prom_targets[@]}"; do
-      printf "          - %s\n" "$t" >> "$PROM_DIR/prometheus.yml"
-    done
-
-    cat >> "$PROM_DIR/prometheus.yml" <<EOF_OCI_PROM_LABELS
-    relabel_configs:
-      - target_label: region
-        replacement: ${OCI_PROM_REGION}
-      - target_label: compartment_id
-        replacement: ${OCI_PROM_COMPARTMENT_OCID}
-EOF_OCI_PROM_LABELS
-  fi
 else
-  log "[SKIP] $PROM_DIR/prometheus.yml append phase skipped"
+  log "[SKIP] $PROM_DIR/prometheus.yml generation skipped"
 fi
 
 if [[ -n "$PROM_ADDITIONAL_SCRAPE_CONFIG" ]]; then
-  if [[ ! -f "$PROM_ADDITIONAL_SCRAPE_CONFIG" ]]; then
-    die "PROM_ADDITIONAL_SCRAPE_CONFIG file not found: $PROM_ADDITIONAL_SCRAPE_CONFIG"
-  fi
+  [[ -f "$PROM_ADDITIONAL_SCRAPE_CONFIG" ]] || die "PROM_ADDITIONAL_SCRAPE_CONFIG file not found: $PROM_ADDITIONAL_SCRAPE_CONFIG"
   cat "$PROM_ADDITIONAL_SCRAPE_CONFIG" >> "$PROM_DIR/prometheus.yml"
   log "Appended additional Prometheus scrape config from: $PROM_ADDITIONAL_SCRAPE_CONFIG"
-fi
-
-if bool_true "$OCI_PROM_ENABLED"; then
-  write_file "$BASE_DIR/oci-metrics-collector/oci_metrics_collector.py" <<'EOF_OCI_COLLECTOR'
-#!/usr/bin/env python3
-import datetime as dt
-import logging
-import os
-import re
-import time
-from typing import Dict, List, Optional, Set, Tuple
-
-import oci
-from prometheus_client import Gauge, start_http_server
-
-
-def env(name: str, default: str = "") -> str:
-    return os.getenv(name, default).strip()
-
-
-def env_bool(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-PORT = int(env("OCI_PROM_PORT", "9160"))
-POLL_SECONDS = int(env("OCI_PROM_POLL_SECONDS", "60"))
-CONFIG_FILE = env("OCI_CONFIG_FILE", "/etc/oci/config")
-PROFILE = env("OCI_CONFIG_PROFILE", "DEFAULT")
-PRIVATE_KEY_FILE = env("OCI_PRIVATE_KEY_FILE", "")
-REGION = env("OCI_REGION", "")
-COMPARTMENT_ID = env("OCI_PROM_COMPARTMENT_OCID")
-RESOURCE_GROUP = env("OCI_PROM_RESOURCE_GROUP", "")
-NAMESPACES = [x.strip() for x in env("OCI_PROM_NAMESPACES", "oci_postgresql").split(",") if x.strip()]
-DBSYSTEM_IDS = {x.strip() for x in env("OCI_PROM_DBSYSTEM_IDS", "").split(",") if x.strip()}
-AUTO_DISCOVER = env_bool("OCI_PROM_AUTO_DISCOVER_DBSYSTEMS", False)
-MAX_METRICS = int(env("OCI_PROM_MAX_METRICS", "200"))
-METRIC_REGEX_RAW = env("OCI_PROM_METRIC_REGEX", ".*")
-
-logging.basicConfig(level=logging.INFO, format="[oci-metrics-collector] %(asctime)s %(levelname)s %(message)s")
-LOG = logging.getLogger("oci-metrics-collector")
-
-try:
-    METRIC_REGEX = re.compile(METRIC_REGEX_RAW)
-except re.error:
-    LOG.warning("Invalid OCI_PROM_METRIC_REGEX=%r. Falling back to '.*'", METRIC_REGEX_RAW)
-    METRIC_REGEX = re.compile(".*")
-
-if not COMPARTMENT_ID:
-    raise SystemExit("OCI_PROM_COMPARTMENT_OCID is required")
-
-METRIC = Gauge(
-    "oci_monitoring_metric_value",
-    "OCI Monitoring metric value (mean aggregation)",
-    ["namespace", "metric_name", "resource_id", "compartment_id", "region", "resource_group", "aggregation"],
-)
-
-
-def load_client() -> Tuple[oci.monitoring.MonitoringClient, Dict[str, str]]:
-    cfg = oci.config.from_file(CONFIG_FILE, PROFILE)
-    if PRIVATE_KEY_FILE:
-        cfg["key_file"] = PRIVATE_KEY_FILE
-    if REGION:
-        cfg["region"] = REGION
-    client = oci.monitoring.MonitoringClient(cfg)
-    return client, cfg
-
-
-def list_metric_names(client: oci.monitoring.MonitoringClient, namespace: str) -> List[str]:
-    details = oci.monitoring.models.ListMetricsDetails(namespace=namespace, resource_group=RESOURCE_GROUP or None)
-    resp = oci.pagination.list_call_get_all_results(
-        client.list_metrics,
-        compartment_id=COMPARTMENT_ID,
-        list_metrics_details=details,
-        limit=1000,
-    )
-    names: List[str] = []
-    seen: Set[str] = set()
-    for m in resp.data:
-        n = getattr(m, "name", None)
-        if n and n not in seen:
-            if not METRIC_REGEX.search(n):
-                continue
-            seen.add(n)
-            names.append(n)
-    names.sort()
-    return names[:MAX_METRICS]
-
-
-def get_resource_id(dimensions: Dict[str, str]) -> str:
-    for key in ("resourceId", "resource_id", "resourceID", "id"):
-        if key in dimensions and dimensions[key]:
-            return str(dimensions[key])
-    return ""
-
-
-def summarize_metric(
-    client: oci.monitoring.MonitoringClient,
-    namespace: str,
-    metric_name: str,
-    region: str,
-    allowed_ids: Set[str],
-    discovered_ids: Set[str],
-) -> Set[Tuple[str, str, str, str, str, str, str]]:
-    now = dt.datetime.now(dt.timezone.utc)
-    start = now - dt.timedelta(minutes=10)
-    details = oci.monitoring.models.SummarizeMetricsDataDetails(
-        namespace=namespace,
-        query=f"{metric_name}[1m].mean()",
-        start_time=start,
-        end_time=now,
-        resolution="1m",
-    )
-    res = client.summarize_metrics_data(compartment_id=COMPARTMENT_ID, summarize_metrics_data_details=details)
-
-    active: Set[Tuple[str, str, str, str, str, str, str]] = set()
-    for series in res.data:
-        dims = dict(getattr(series, "dimensions", {}) or {})
-        resource_id = get_resource_id(dims)
-
-        if allowed_ids and resource_id and resource_id not in allowed_ids:
-            continue
-        if AUTO_DISCOVER and resource_id:
-            discovered_ids.add(resource_id)
-
-        points = list(getattr(series, "aggregated_datapoints", []) or [])
-        if not points:
-            continue
-        latest = max(points, key=lambda p: getattr(p, "timestamp", dt.datetime.min.replace(tzinfo=dt.timezone.utc)))
-        value = getattr(latest, "value", None)
-        if value is None:
-            continue
-
-        labels = (
-            namespace,
-            metric_name,
-            resource_id,
-            COMPARTMENT_ID,
-            region,
-            RESOURCE_GROUP,
-            "mean",
-        )
-        METRIC.labels(*labels).set(float(value))
-        active.add(labels)
-
-    return active
-
-
-def main() -> None:
-    client, cfg = load_client()
-    active_last: Set[Tuple[str, str, str, str, str, str, str]] = set()
-    region = cfg.get("region", REGION)
-
-    LOG.info("Starting OCI metrics collector on :%s", PORT)
-    LOG.info("Namespaces=%s compartment=%s resource_group=%s", NAMESPACES, COMPARTMENT_ID, RESOURCE_GROUP)
-    if DBSYSTEM_IDS:
-        LOG.info("Initial DBSystem filters: %s", sorted(DBSYSTEM_IDS))
-
-    start_http_server(PORT)
-    while True:
-        try:
-            active_now: Set[Tuple[str, str, str, str, str, str, str]] = set()
-            discovered_ids: Set[str] = set()
-            effective_ids = set(DBSYSTEM_IDS)
-
-            for ns in NAMESPACES:
-                metric_names = list_metric_names(client, ns)
-                for metric_name in metric_names:
-                    active_now |= summarize_metric(client, ns, metric_name, region, effective_ids, discovered_ids)
-
-            if AUTO_DISCOVER and discovered_ids:
-                DBSYSTEM_IDS.update(discovered_ids)
-
-            for stale in (active_last - active_now):
-                try:
-                    METRIC.remove(*stale)
-                except Exception:
-                    pass
-            active_last = active_now
-
-            LOG.info("Published series=%d discovered_dbsystems=%d", len(active_now), len(DBSYSTEM_IDS))
-        except Exception as exc:
-            LOG.exception("Collection cycle failed: %s", exc)
-
-        time.sleep(POLL_SECONDS)
-
-
-if __name__ == "__main__":
-    main()
-EOF_OCI_COLLECTOR
 fi
 
 write_file "$PGEXP_DIR/queries.yaml" <<'EOF_Q'
@@ -398,61 +107,10 @@ datasources:
     editable: true
 EOF_DS
 
-if [[ "$OCI_DS_ENABLED" == "true" ]]; then
-  if [[ ! -f "$OCI_CONFIG_FILE" ]]; then
-    die "OCI_DS_ENABLED=true but OCI_CONFIG_FILE not found: $OCI_CONFIG_FILE"
-  fi
-
-  if ! grep -Eq "^\[${OCI_CONFIG_PROFILE_EFFECTIVE}\][[:space:]]*$" "$OCI_CONFIG_FILE"; then
-    warn "Profile [$OCI_CONFIG_PROFILE_EFFECTIVE] not found in OCI config file: $OCI_CONFIG_FILE"
-  fi
-
-  OCI_CONFIG_PATH_EFFECTIVE="$OCI_CONTAINER_CONFIG_PATH"
-
-  OCI_PRIVATE_KEY_EFFECTIVE="$OCI_PRIVATE_KEY_PEM_SNIPPET"
-  if [[ "$OCI_PRIVATE_KEY_EFFECTIVE" == *"PASTE_PRIVATE_KEY_CONTENT_HERE"* ]] && [[ -f "$OCI_PRIVATE_KEY_FILE" ]]; then
-    OCI_PRIVATE_KEY_EFFECTIVE="$(tr -d '\r' < "$OCI_PRIVATE_KEY_FILE" | escape_newlines)"
-    log "Using OCI private key content from OCI_PRIVATE_KEY_FILE=${OCI_PRIVATE_KEY_FILE}"
-  fi
-
-  if [[ "$OCI_PRIVATE_KEY_EFFECTIVE" == *"PASTE_PRIVATE_KEY_CONTENT_HERE"* ]]; then
-    die "OCI private key is still placeholder. Set OCI_PRIVATE_KEY_PEM_SNIPPET or provide OCI_PRIVATE_KEY_FILE=$OCI_PRIVATE_KEY_FILE"
-  fi
-
-  cat >> "$GRAFANA_DS_DIR/datasources.yml" <<EOF_OCI_DS
-  - name: ${OCI_DS_NAME}
-    uid: ${OCI_DS_UID}
-    type: oci-metrics-datasource
-    access: proxy
-    editable: true
-    jsonData:
-      environment: local
-      profile0: ${OCI_CONFIG_PROFILE_EFFECTIVE}
-      configFilePath0: ${OCI_CONFIG_PATH_EFFECTIVE}
-      tenancy0: ${OCI_TENANCY_OCID}
-      user0: ${OCI_USER_OCID}
-      region0: ${OCI_REGION}
-      fingerprint0: ${OCI_FINGERPRINT}
-    secureJsonData:
-      privateKey0: "${OCI_PRIVATE_KEY_EFFECTIVE}"
-EOF_OCI_DS
-fi
-
-OCI_GRAFANA_MOUNTS=""
-if [[ "$OCI_DS_ENABLED" == "true" ]]; then
-  OCI_GRAFANA_MOUNTS+=$'\n'
-  OCI_GRAFANA_MOUNTS+="      - ${OCI_CONFIG_FILE}:${OCI_CONTAINER_CONFIG_PATH}:ro"
-
-  if [[ -f "$OCI_PRIVATE_KEY_FILE" ]]; then
-    OCI_GRAFANA_MOUNTS+=$'\n'
-    OCI_GRAFANA_MOUNTS+="      - ${OCI_PRIVATE_KEY_FILE}:${OCI_CONTAINER_PRIVATE_KEY_PATH}:ro"
-  fi
-fi
-
 write_file "$GRAFANA_DASH_PROV_DIR/dashboards.yml" <<'EOF_DP'
 apiVersion: 1
 providers:
-  - name: OCI-PostgreSQL
+  - name: PostgreSQL
     orgId: 1
     folder: PostgreSQL
     type: file
@@ -463,39 +121,19 @@ providers:
       path: /var/lib/grafana/dashboards
 EOF_DP
 
-LEGACY_OCI_DASH="$GRAFANA_DASH_DIR/oci-postgresql-metrics.json"
-if [[ -f "$LEGACY_OCI_DASH" ]]; then
-  rm -f "$LEGACY_OCI_DASH"
-  log "Removed legacy dashboard: $LEGACY_OCI_DASH"
-fi
-
 ALL_VAR='$__all'
 INSTANCE_VAR='$instance'
 DATNAME_VAR='$datname'
-OCI_PROM_REGION_VAR='$oci_region'
-OCI_PROM_COMPARTMENT_VAR='$oci_compartment'
-OCI_PROM_DBSYSTEM_VAR='$oci_dbsystem'
-OCI_PROM_METRIC_REGEX_VAR='$oci_metric_regex'
 
-OCI_PROM_REGION_DEFAULT="$OCI_PROM_REGION"
-[[ -z "$OCI_PROM_REGION_DEFAULT" ]] && OCI_PROM_REGION_DEFAULT='.*'
-OCI_PROM_COMPARTMENT_DEFAULT="$OCI_PROM_COMPARTMENT_OCID"
-[[ -z "$OCI_PROM_COMPARTMENT_DEFAULT" ]] && OCI_PROM_COMPARTMENT_DEFAULT='.*'
-OCI_PROM_DBSYSTEM_DEFAULT="${OCI_PROM_DBSYSTEM_IDS:-$OCI_PROM_DBSYSTEM_ID}"
-OCI_PROM_DBSYSTEM_DEFAULT="$(printf '%s' "$OCI_PROM_DBSYSTEM_DEFAULT" | tr -d '[:space:]' | sed 's/,/|/g')"
-[[ -z "$OCI_PROM_DBSYSTEM_DEFAULT" ]] && OCI_PROM_DBSYSTEM_DEFAULT='.*'
-OCI_PROM_METRIC_REGEX_DEFAULT="$OCI_PROM_METRIC_REGEX"
-[[ -z "$OCI_PROM_METRIC_REGEX_DEFAULT" ]] && OCI_PROM_METRIC_REGEX_DEFAULT='.*'
-
-write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_UNIFIED_DASH
+write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_DASH
 {
-  "title": "OCI PostgreSQL Unified Insights",
+  "title": "PostgreSQL Unified Insights",
   "uid": "postgresql-unified-insights",
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",
   "time": {"from": "now-6h", "to": "now"},
-  "tags": ["postgresql", "prometheus", "oci", "unified"],
+  "tags": ["postgresql", "prometheus", "unified"],
   "templating": {
     "list": [
       {
@@ -519,48 +157,6 @@ write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_UNIFIED_DA
         "includeAll": true,
         "multi": false,
         "current": {"text": "All", "value": "${ALL_VAR}"}
-      },
-      {
-        "name": "compartment",
-        "type": "textbox",
-        "label": "OCI Compartment OCID",
-        "query": "${OCI_PG_COMPARTMENT_OCID}",
-        "current": {"text": "${OCI_PG_COMPARTMENT_OCID}", "value": "${OCI_PG_COMPARTMENT_OCID}"}
-      },
-      {
-        "name": "resourceGroup",
-        "type": "textbox",
-        "label": "OCI Resource Group",
-        "query": "${OCI_PG_RESOURCE_GROUP}",
-        "current": {"text": "${OCI_PG_RESOURCE_GROUP}", "value": "${OCI_PG_RESOURCE_GROUP}"}
-      },
-      {
-        "name": "oci_region",
-        "type": "textbox",
-        "label": "OCI Region (Prometheus bridge)",
-        "query": "${OCI_PROM_REGION_DEFAULT}",
-        "current": {"text": "${OCI_PROM_REGION_DEFAULT}", "value": "${OCI_PROM_REGION_DEFAULT}"}
-      },
-      {
-        "name": "oci_compartment",
-        "type": "textbox",
-        "label": "OCI Compartment (Prometheus bridge)",
-        "query": "${OCI_PROM_COMPARTMENT_DEFAULT}",
-        "current": {"text": "${OCI_PROM_COMPARTMENT_DEFAULT}", "value": "${OCI_PROM_COMPARTMENT_DEFAULT}"}
-      },
-      {
-        "name": "oci_dbsystem",
-        "type": "textbox",
-        "label": "OCI DBSystem OCID (Prometheus bridge)",
-        "query": "${OCI_PROM_DBSYSTEM_DEFAULT}",
-        "current": {"text": "${OCI_PROM_DBSYSTEM_DEFAULT}", "value": "${OCI_PROM_DBSYSTEM_DEFAULT}"}
-      },
-      {
-        "name": "oci_metric_regex",
-        "type": "textbox",
-        "label": "OCI Metric Regex (Prometheus bridge)",
-        "query": "${OCI_PROM_METRIC_REGEX_DEFAULT}",
-        "current": {"text": "${OCI_PROM_METRIC_REGEX_DEFAULT}", "value": "${OCI_PROM_METRIC_REGEX_DEFAULT}"}
       }
     ]
   },
@@ -647,60 +243,10 @@ write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_UNIFIED_DA
       "targets": [
         {"refId": "A", "expr": "topk(10, sum by (short_query) (pg_stat_statements_top_calls{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}))", "legendFormat": "{{short_query}}"}
       ]
-    },
-    {
-      "type": "row",
-      "title": "OCI Monitoring (OCI Metrics Datasource)",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 21},
-      "collapsed": false
-    },
-    {
-      "type": "timeseries",
-      "title": "OCI CPU Utilization (%)",
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 22},
-      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
-      "targets": [{"refId": "A", "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"}, "queryText": "CpuUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
-    },
-    {
-      "type": "timeseries",
-      "title": "OCI Memory Utilization (%)",
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 22},
-      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
-      "targets": [{"refId": "A", "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"}, "queryText": "MemoryUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
-    },
-    {
-      "type": "timeseries",
-      "title": "OCI Connections",
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 22},
-      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
-      "targets": [{"refId": "A", "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"}, "queryText": "DatabaseConnections[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
-    },
-    {
-      "type": "timeseries",
-      "title": "OCI Read/Write IOPS",
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 30},
-      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
-      "targets": [
-        {"refId": "A", "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"}, "queryText": "ReadIOPS[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"},
-        {"refId": "B", "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"}, "queryText": "WriteIOPS[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "All Metrics via Prometheus Bridge",
-      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 38},
-      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "oci_monitoring_metric_value{job=\"${OCI_PROM_JOB_NAME}\",metric_name=~\"${OCI_PROM_METRIC_REGEX_VAR}\",region=~\"${OCI_PROM_REGION_VAR}\",compartment_id=~\"${OCI_PROM_COMPARTMENT_VAR}\",resource_id=~\"${OCI_PROM_DBSYSTEM_VAR}\"}",
-          "legendFormat": "{{namespace}}/{{metric_name}} {{resource_id}}"
-        }
-      ]
     }
   ]
 }
-EOF_UNIFIED_DASH
+EOF_DASH
 
 write_file "$NGINX_CONF_DIR/default.conf" <<EOF_NGX
 server {
@@ -761,12 +307,11 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "${GRAFANA_ALLOW_SIGNUP}"
       GF_SECURITY_COOKIE_SECURE: "${GRAFANA_COOKIE_SECURE}"
       GF_SECURITY_COOKIE_SAMESITE: ${GRAFANA_COOKIE_SAMESITE}
-      GF_INSTALL_PLUGINS: ${GRAFANA_INSTALL_PLUGINS}
+      GF_INSTALL_PLUGINS: "${GRAFANA_INSTALL_PLUGINS}"
     volumes:
       - ${GRAFANA_DATA_DIR}:/var/lib/grafana
       - ${BASE_DIR}/grafana/provisioning:/etc/grafana/provisioning:ro
       - ${GRAFANA_DASH_DIR}:/var/lib/grafana/dashboards:ro
-${OCI_GRAFANA_MOUNTS}
     networks: [monitoring]
 
   prometheus:
@@ -786,42 +331,6 @@ ${OCI_GRAFANA_MOUNTS}
     networks: [monitoring]
 
 EOF_DC
-
-  if bool_true "$OCI_PROM_ENABLED"; then
-    cat >> "$BASE_DIR/docker-compose.yaml" <<EOF_OCI_COLLECTOR_SERVICE
-
-  oci_metrics_collector:
-    image: ${OCI_PROM_COLLECTOR_IMAGE}
-    container_name: oci-metrics-collector
-    restart: unless-stopped
-    command:
-      - /bin/sh
-      - -c
-      - |
-        set -e
-        pip install --no-cache-dir oci prometheus-client
-        python /opt/collector/oci_metrics_collector.py
-    environment:
-      OCI_PROM_PORT: "${OCI_PROM_PORT}"
-      OCI_PROM_POLL_SECONDS: "${OCI_PROM_POLL_SECONDS}"
-      OCI_CONFIG_FILE: /etc/oci/config
-      OCI_PRIVATE_KEY_FILE: /etc/oci/priv.key
-      OCI_CONFIG_PROFILE: ${OCI_CONFIG_PROFILE_EFFECTIVE}
-      OCI_REGION: ${OCI_PROM_REGION}
-      OCI_PROM_COMPARTMENT_OCID: ${OCI_PROM_COMPARTMENT_OCID}
-      OCI_PROM_RESOURCE_GROUP: ${OCI_PROM_RESOURCE_GROUP}
-      OCI_PROM_NAMESPACES: "${OCI_PROM_NAMESPACES}"
-      OCI_PROM_DBSYSTEM_IDS: "${OCI_PROM_DBSYSTEM_IDS}"
-      OCI_PROM_AUTO_DISCOVER_DBSYSTEMS: "${OCI_PROM_AUTO_DISCOVER_DBSYSTEMS}"
-      OCI_PROM_MAX_METRICS: "${OCI_PROM_MAX_METRICS}"
-      OCI_PROM_METRIC_REGEX: "${OCI_PROM_METRIC_REGEX}"
-    volumes:
-      - ${BASE_DIR}/oci-metrics-collector:/opt/collector:ro
-      - ${OCI_CONFIG_FILE}:/etc/oci/config:ro
-      - ${OCI_PRIVATE_KEY_FILE}:/etc/oci/priv.key:ro
-    networks: [monitoring]
-EOF_OCI_COLLECTOR_SERVICE
-  fi
 
   for i in $(seq 1 "$EXPORTER_COUNT"); do
     name_var="EXPORTER_${i}_NAME"
@@ -856,7 +365,7 @@ networks:
     driver: bridge
 EOF_END
 else
-  log "[SKIP] $BASE_DIR/docker-compose.yaml append phase skipped"
+  log "[SKIP] $BASE_DIR/docker-compose.yaml generation skipped"
 fi
 
 log "All stack config files generated under $BASE_DIR"
