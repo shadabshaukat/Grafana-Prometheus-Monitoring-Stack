@@ -38,6 +38,8 @@ This repository is refactored so all operational scripts read from `.env` (singl
 ├── generate_configs.sh
 ├── deploy_stack.sh
 ├── check_grafana_bindings.sh
+├── start_stack.sh
+├── stop_stack.sh
 ├── destroy_stack.sh
 ├── rotate_certs.sh
 ├── smoke_test.sh
@@ -86,6 +88,18 @@ Default from `.env`: `https://<host-ip>:8443`
 
 ```bash
 sudo ./deploy_stack.sh
+```
+
+### Start (without full regenerate/redeploy)
+
+```bash
+sudo ./start_stack.sh
+```
+
+### Stop
+
+```bash
+sudo ./stop_stack.sh
 ```
 
 ### Destroy (keep data)

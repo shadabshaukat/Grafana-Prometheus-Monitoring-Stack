@@ -10,7 +10,7 @@ This runbook provides a production-style setup for:
 
 > **Important (current build):** This repository is now **env-driven**.  
 > The operational source of truth is: `.env`, `lib/common.sh`, and these scripts:  
-> `generate_configs.sh`, `deploy_stack.sh`, `check_grafana_bindings.sh`, `destroy_stack.sh`, `rotate_certs.sh`, `smoke_test.sh`.
+> `generate_configs.sh`, `deploy_stack.sh`, `start_stack.sh`, `stop_stack.sh`, `check_grafana_bindings.sh`, `destroy_stack.sh`, `rotate_certs.sh`, `smoke_test.sh`.
 
 ---
 
@@ -606,6 +606,8 @@ You now have the following scripts (generated in your working directory):
 - `lib/common.sh` → shared functions and `.env` loader used by all scripts
 - `generate_configs.sh` → writes all YAML/config files under `/opt/observability-stack`
 - `deploy_stack.sh` → one-command deploy (generate configs, create cert if missing, start stack, apply firewall)
+- `start_stack.sh` → start stack containers without full regenerate/redeploy
+- `stop_stack.sh` → stop stack containers cleanly
 - `check_grafana_bindings.sh` → Grafana API validation for datasource bindings on unified dashboard
 - `destroy_stack.sh` → one-command destroy (optionally purge persisted data)
 - `rotate_certs.sh` → rotate self-signed TLS cert and reload NGINX
@@ -614,8 +616,8 @@ You now have the following scripts (generated in your working directory):
 Copy scripts to target path and make executable:
 
 ```bash
-sudo cp /Users/shadab/Downloads/{generate_configs.sh,deploy_stack.sh,check_grafana_bindings.sh,destroy_stack.sh,rotate_certs.sh,smoke_test.sh} /opt/observability-stack/
-sudo chmod +x /opt/observability-stack/{generate_configs.sh,deploy_stack.sh,check_grafana_bindings.sh,destroy_stack.sh,rotate_certs.sh,smoke_test.sh}
+sudo cp /Users/shadab/Downloads/{generate_configs.sh,deploy_stack.sh,start_stack.sh,stop_stack.sh,check_grafana_bindings.sh,destroy_stack.sh,rotate_certs.sh,smoke_test.sh} /opt/observability-stack/
+sudo chmod +x /opt/observability-stack/{generate_configs.sh,deploy_stack.sh,start_stack.sh,stop_stack.sh,check_grafana_bindings.sh,destroy_stack.sh,rotate_certs.sh,smoke_test.sh}
 ```
 
 Also copy env + shared library:
@@ -633,6 +635,18 @@ sudo cp /Users/shadab/Downloads/lib/common.sh /opt/observability-stack/lib/commo
 
 ```bash
 sudo /opt/observability-stack/deploy_stack.sh
+```
+
+### Start stack
+
+```bash
+sudo /opt/observability-stack/start_stack.sh
+```
+
+### Stop stack
+
+```bash
+sudo /opt/observability-stack/stop_stack.sh
 ```
 
 ### Destroy with one command
