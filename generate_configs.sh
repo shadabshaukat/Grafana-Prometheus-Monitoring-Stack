@@ -67,6 +67,14 @@ else
   log "[SKIP] $PROM_DIR/prometheus.yml append phase skipped"
 fi
 
+if [[ -n "$PROM_ADDITIONAL_SCRAPE_CONFIG" ]]; then
+  if [[ ! -f "$PROM_ADDITIONAL_SCRAPE_CONFIG" ]]; then
+    die "PROM_ADDITIONAL_SCRAPE_CONFIG file not found: $PROM_ADDITIONAL_SCRAPE_CONFIG"
+  fi
+  cat "$PROM_ADDITIONAL_SCRAPE_CONFIG" >> "$PROM_DIR/prometheus.yml"
+  log "Appended additional Prometheus scrape config from: $PROM_ADDITIONAL_SCRAPE_CONFIG"
+fi
+
 write_file "$PGEXP_DIR/queries.yaml" <<'EOF_Q'
 pg_stat_statements_top:
   query: |
@@ -94,6 +102,7 @@ EOF_Q
 
 write_file "$GRAFANA_DS_DIR/datasources.yml" <<EOF_DS
 apiVersion: 1
+prune: true
 datasources:
   - name: ${GRAFANA_DS_NAME}
     uid: ${GRAFANA_DS_UID}

@@ -34,6 +34,7 @@ load_env() {
   : "${LOCAL_TEST_HOST:=127.0.0.1}"
   : "${PROM_PORT:=9090}"
   : "${PROM_SCRAPE_INTERVAL:=15s}"
+  : "${PROM_ADDITIONAL_SCRAPE_CONFIG:=}"
   : "${PROM_IMAGE:=prom/prometheus:latest}"
   : "${PROM_CONTAINER_NAME:=prometheus}"
   : "${GRAFANA_INTERNAL_PORT:=3000}"

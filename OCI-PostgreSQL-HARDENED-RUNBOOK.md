@@ -795,6 +795,17 @@ OCI_PRIVATE_KEY_PEM_SNIPPET=-----BEGIN PRIVATE KEY-----\nMIIEv...<redacted>...\n
 > Keep `\n` escaped in `.env`.  
 > If you keep the placeholder `PASTE_PRIVATE_KEY_CONTENT_HERE`, generator will try to load content from `OCI_PRIVATE_KEY_FILE`.
 > Ensure `OCI_CONFIG_FILE` and `OCI_PRIVATE_KEY_FILE` exist on host; deploy mounts them into Grafana at `OCI_CONTAINER_CONFIG_PATH` and `OCI_CONTAINER_PRIVATE_KEY_PATH`.
+> Generator is fail-fast for OCI auth: if config path is missing, or private key remains placeholder without a valid key file, generation exits with error.
+
+### Optional: single datasource approach via Prometheus
+
+If you want OCI metrics visible through Grafana Prometheus datasource only, ingest OCI metrics into Prometheus (e.g., OCI->OTel Collector->Prometheus endpoint) and append scrape jobs using:
+
+```env
+PROM_ADDITIONAL_SCRAPE_CONFIG=/opt/observability-stack/prometheus/extra-scrape-config.yml
+```
+
+`generate_configs.sh` appends this file to generated `prometheus.yml`.
 
 ### Deploy/redeploy to apply OCI datasource + dashboard
 

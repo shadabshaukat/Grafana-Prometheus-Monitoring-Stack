@@ -195,6 +195,21 @@ Notes:
 - Generator also mounts `OCI_CONFIG_FILE` and `OCI_PRIVATE_KEY_FILE` into Grafana container at `OCI_CONTAINER_CONFIG_PATH` / `OCI_CONTAINER_PRIVATE_KEY_PATH`.
 - Keep `\\n` escaped if setting the full key inline in `.env`.
 
+Fail-fast behavior:
+
+- If `OCI_DS_ENABLED=true` and `OCI_CONFIG_FILE` is missing, generation stops with an explicit error.
+- If key is still placeholder and no valid key file is found, generation stops with an explicit error.
+
+### Optional: use Prometheus as single datasource for OCI metrics
+
+If you prefer one datasource in Grafana, you can ingest OCI metrics into Prometheus (for example via an OCI/OTel collector exporter pipeline) and append scrape jobs using:
+
+```env
+PROM_ADDITIONAL_SCRAPE_CONFIG=/opt/observability-stack/prometheus/extra-scrape-config.yml
+```
+
+The generator appends this file to `prometheus.yml` when set.
+
 ### New OCI PostgreSQL dashboard
 
 The generator creates:
