@@ -1,12 +1,13 @@
 # PostgreSQL Observability Stack (Prometheus + Grafana)
 
-This stack is now intentionally **Prometheus-only** for data collection and visualization.
+This stack is intentionally **Prometheus-centric** for PostgreSQL metrics and Grafana visualization, with optional OCI datasource plugin installation for Grafana.
 
 Included components:
 - Grafana
 - Prometheus
 - postgres_exporter (multi-endpoint)
 - NGINX TLS reverse proxy
+- Prometheus recording rules for unified KPI/SLO calculations
 
 All operational scripts are environment-driven via `.env` (single source of truth).
 
@@ -24,6 +25,7 @@ This repository supports local and server deployments with the same workflow:
 - `grafana` is private behind NGINX.
 - `prometheus` is bound to `${PROM_BIND_ADDRESS}:${PROM_PORT}` (default localhost only).
 - one or more `postgres_exporter_*` services scrape PostgreSQL endpoints defined by DSN.
+- Grafana can auto-install OCI datasource plugins using `.env` toggles.
 
 ---
 
@@ -64,6 +66,12 @@ Set at minimum:
 - `EXPORTER_COUNT`
 - `EXPORTER_TARGETS`
 - `EXPORTER_N_NAME` / `EXPORTER_N_DSN`
+
+Optional (OCI plugin auto-install):
+
+- `ENABLE_OCI_PLUGINS=true`
+- `OCI_METRICS_PLUGIN_ID=oci-metrics-datasource`
+- `OCI_LOGS_PLUGIN_ID=oci-logs-datasource`
 
 Example (2 exporters):
 
@@ -118,6 +126,7 @@ RUN_GRAFANA_BINDING_CHECK_AFTER_DEPLOY=true
 - Prometheus config with:
   - `prometheus` scrape job
   - `postgres_exporters` scrape job
+- Prometheus recording rules (`recording-rules.yml`) for reusable dashboard KPIs
 - Grafana Prometheus datasource provisioning
 - Unified PostgreSQL dashboard (`postgresql-unified-insights.json`)
 - NGINX TLS reverse proxy config
@@ -154,15 +163,27 @@ sudo ./deploy_stack.sh
 
 Generated dashboard: `postgresql-unified-insights.json`
 
-Includes core PostgreSQL views such as:
+Includes structured, production-oriented sections:
+
+- **SLO & alerting signals** (availability, connection saturation, deadlocks, replication lag, SQL latency)
+- **Core workload** (TPS/session states)
+- **WAL/checkpoint/storage pressure**
+- **Autovacuum & table health**
+- **Locks/replication/exporter health**
+- **Cardinality-safe SQL performance** (`queryid + short_query`)
+
+Key metrics include:
 
 - availability (`pg_up`)
-- active connections
-- TPS (commit + rollback)
+- active connections / saturation
+- TPS (commit + rollback) via recording rules
 - cache hit ratio
 - deadlocks rate
+- replication replay lag
+- checkpoint rate and write/sync pressure
+- dead tuples and autovacuum rates
 - database size
-- top SQL by total execution time and call volume (via `pg_stat_statements` custom query)
+- top SQL by total execution time and call volume (via `pg_stat_statements` custom query, cardinality-safe grouping)
 
 Dashboard variables:
 
@@ -241,5 +262,6 @@ curl -s http://127.0.0.1:9090/api/v1/targets | jq '.data.activeTargets[] | {scra
 ## Notes
 
 - Default Grafana datasource is Prometheus (`GRAFANA_DS_UID=prometheus`).
-- No additional datasource plugins are required.
+- OCI datasource plugins can be auto-installed in Grafana via `.env` (`ENABLE_OCI_PLUGINS`, `OCI_METRICS_PLUGIN_ID`, `OCI_LOGS_PLUGIN_ID`).
+- `postgres_exporter` collects metrics, not PostgreSQL logs.
 - Keep Prometheus host bind on localhost unless you explicitly want remote access.

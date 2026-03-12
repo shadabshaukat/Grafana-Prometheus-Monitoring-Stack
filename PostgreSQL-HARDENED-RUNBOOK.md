@@ -5,6 +5,7 @@ This runbook describes a production-style deployment for:
 - Prometheus
 - postgres_exporter (multi-DB)
 - NGINX reverse proxy with self-signed TLS
+- Prometheus recording rules for unified KPI/SLO metrics
 
 > This stack is Prometheus-only for metrics ingestion and dashboarding.
 
@@ -45,6 +46,13 @@ Expected deploy behavior:
 - starts/updates containers
 - applies firewall rules (when enabled)
 - runs smoke tests and datasource-binding checks (when enabled)
+
+OCI datasource plugin behavior (optional):
+
+- When `ENABLE_OCI_PLUGINS=true`, Grafana installs plugin IDs from:
+  - `OCI_METRICS_PLUGIN_ID`
+  - `OCI_LOGS_PLUGIN_ID`
+- Plugin IDs are merged with `GRAFANA_INSTALL_PLUGINS` and deduplicated.
 
 ---
 
@@ -95,6 +103,12 @@ Dashboard/API binding check:
 sudo ./check_grafana_bindings.sh
 ```
 
+Recording rules validation (optional):
+
+```bash
+curl -s http://127.0.0.1:9090/api/v1/rules | jq '.data.groups[] | {name, file}'
+```
+
 ---
 
 ## 6) Change management and rollback
@@ -110,5 +124,19 @@ sudo ./check_grafana_bindings.sh
 
 - Grafana data persists in `${BASE_DIR}/data/grafana`.
 - Prometheus TSDB persists in `${BASE_DIR}/data/prometheus`.
+- Prometheus recording rules are generated at `${BASE_DIR}/prometheus/recording-rules.yml`.
 - Rotate certs periodically with `sudo ./rotate_certs.sh`.
 - `rotate_certs.sh` writes timestamped cert/key backups before replacement.
+
+---
+
+## 8) Unified dashboard behavior
+
+The generated unified dashboard includes:
+
+1. SLO-focused KPIs with thresholds (availability, deadlocks, replication lag, connection utilization, SQL latency).
+2. WAL/checkpoint pressure views.
+3. Autovacuum and dead tuple health.
+4. Cardinality-safe top SQL visualizations (`queryid + short_query`).
+
+This improves triage speed and reduces expensive ad-hoc query load in Grafana panels.
