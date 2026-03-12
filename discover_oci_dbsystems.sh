@@ -19,8 +19,13 @@ require_cmd() {
 require_cmd oci
 require_cmd jq
 
-if ! oci psql db-system list --help >/dev/null 2>&1; then
-  die "Your OCI CLI does not support 'oci psql db-system list'. Please upgrade OCI CLI to a version with PostgreSQL service commands."
+OCI_LIST_CMD=()
+if oci psql db-system-collection list-db-systems --help >/dev/null 2>&1; then
+  OCI_LIST_CMD=(oci psql db-system-collection list-db-systems)
+elif oci psql db-system list --help >/dev/null 2>&1; then
+  OCI_LIST_CMD=(oci psql db-system list)
+else
+  die "Your OCI CLI does not support PostgreSQL DBSystem list commands. Expected one of: 'oci psql db-system-collection list-db-systems' or 'oci psql db-system list'."
 fi
 
 PROFILE="$(sanitize_oci_profile "$OCI_CONFIG_PROFILE")"
@@ -37,7 +42,7 @@ fi
 
 oci_output=""
 if ! oci_output="$({
-  oci psql db-system list \
+  "${OCI_LIST_CMD[@]}" \
     --compartment-id "$COMPARTMENT_ID" \
     --all \
     --config-file "$OCI_CONFIG_FILE" \
@@ -54,6 +59,11 @@ if ! printf '%s' "$oci_output" | jq -e . >/dev/null 2>&1; then
   die "OCI CLI returned non-JSON output; cannot parse DB System IDs."
 fi
 
-ids="$(printf '%s' "$oci_output" | jq -r '(.data[]?.id // empty), (.data.items[]?.id // empty)' | paste -sd, -)"
+ids="$(
+  printf '%s' "$oci_output" \
+    | jq -r '(.data[]?.id // empty), (.data.items[]?.id // empty), (.data.id // empty)' \
+    | awk 'NF && !seen[$0]++' \
+    | paste -sd, -
+)"
 
 printf '%s\n' "$ids"
