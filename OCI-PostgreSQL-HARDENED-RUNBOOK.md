@@ -756,8 +756,10 @@ OCI_DS_UID=oci-metrics
 
 # OCI auth profile reference
 OCI_CONFIG_PROFILE=DEFAULT
-OCI_CONFIG_FILE=/Users/shadab/.oci/config
-OCI_PRIVATE_KEY_FILE=/Users/shadab/Downloads/OracleContent/Keys/oci_config/oci_api_key.pem
+OCI_CONFIG_FILE=/home/opc/.oci/config
+OCI_PRIVATE_KEY_FILE=/home/opc/.oci/priv.key
+OCI_CONTAINER_CONFIG_PATH=/etc/grafana/oci/config
+OCI_CONTAINER_PRIVATE_KEY_PATH=/etc/grafana/oci/priv.key
 
 # OCI identity values
 OCI_TENANCY_OCID=ocid1.tenancy.oc1..<REPLACE_ME>
@@ -778,7 +780,7 @@ OCI_PG_RESOURCE_GROUP=postgresql
 Current values extracted from `/Users/shadab/.oci/config` (`[DEFAULT]`):
 
 - `OCI_CONFIG_PROFILE=DEFAULT`
-- `OCI_CONFIG_FILE=/Users/shadab/.oci/config`
+- `OCI_CONFIG_FILE=/home/opc/.oci/config`
 - `OCI_TENANCY_OCID=ocid1.tenancy.oc1..aaaaaaaafhegmvy2da7xzh2b5jbmhdkfr4cr4e37m5filt4zgxs6mfl7icua`
 - `OCI_USER_OCID=ocid1.user.oc1..aaaaaaaa5cq3iewffep5nzqb7qzoe6mpj45gt4kndvzwvuxzzavpbiucqqaq`
 - `OCI_REGION=ap-tokyo-1`
@@ -792,6 +794,7 @@ OCI_PRIVATE_KEY_PEM_SNIPPET=-----BEGIN PRIVATE KEY-----\nMIIEv...<redacted>...\n
 
 > Keep `\n` escaped in `.env`.  
 > If you keep the placeholder `PASTE_PRIVATE_KEY_CONTENT_HERE`, generator will try to load content from `OCI_PRIVATE_KEY_FILE`.
+> Ensure `OCI_CONFIG_FILE` and `OCI_PRIVATE_KEY_FILE` exist on host; deploy mounts them into Grafana at `OCI_CONTAINER_CONFIG_PATH` and `OCI_CONTAINER_PRIVATE_KEY_PATH`.
 
 ### Deploy/redeploy to apply OCI datasource + dashboard
 

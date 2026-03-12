@@ -174,8 +174,12 @@ OCI_DS_ENABLED=true
 OCI_DS_NAME="Oracle Cloud Infrastructure Metrics"
 OCI_DS_UID=oci-metrics
 OCI_CONFIG_PROFILE=DEFAULT
-OCI_CONFIG_FILE=/Users/shadab/.oci/config
-OCI_PRIVATE_KEY_FILE=/path/to/oci_api_key.pem
+# Host paths (must exist on the VM host)
+OCI_CONFIG_FILE=/home/opc/.oci/config
+OCI_PRIVATE_KEY_FILE=/home/opc/.oci/priv.key
+# Container paths used by Grafana datasource
+OCI_CONTAINER_CONFIG_PATH=/etc/grafana/oci/config
+OCI_CONTAINER_PRIVATE_KEY_PATH=/etc/grafana/oci/priv.key
 OCI_TENANCY_OCID=ocid1.tenancy.oc1..<REPLACE_ME>
 OCI_USER_OCID=ocid1.user.oc1..<REPLACE_ME>
 OCI_REGION=ap-tokyo-1
@@ -187,7 +191,8 @@ OCI_PG_RESOURCE_GROUP=postgresql
 
 Notes:
 
-- If `OCI_PRIVATE_KEY_PEM_SNIPPET` is left as placeholder and `OCI_PRIVATE_KEY_FILE` exists, generator will read key content from file automatically.
+- If `OCI_PRIVATE_KEY_PEM_SNIPPET` is left as placeholder and `OCI_PRIVATE_KEY_FILE` exists, generator reads key content from file automatically.
+- Generator also mounts `OCI_CONFIG_FILE` and `OCI_PRIVATE_KEY_FILE` into Grafana container at `OCI_CONTAINER_CONFIG_PATH` / `OCI_CONTAINER_PRIVATE_KEY_PATH`.
 - Keep `\\n` escaped if setting the full key inline in `.env`.
 
 ### New OCI PostgreSQL dashboard

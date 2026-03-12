@@ -8,7 +8,7 @@ source "$ROOT_DIR/lib/common.sh"
 load_env
 
 escape_newlines() {
-  sed ':a;N;$!ba;s/\n/\\n/g'
+  awk '{printf "%s\\n", $0}'
 }
 
 FORCE="false"
@@ -105,10 +105,19 @@ datasources:
 EOF_DS
 
 if [[ "$OCI_DS_ENABLED" == "true" ]]; then
+  if [[ ! -f "$OCI_CONFIG_FILE" ]]; then
+    die "OCI_DS_ENABLED=true but OCI_CONFIG_FILE not found: $OCI_CONFIG_FILE"
+  fi
+  OCI_CONFIG_PATH_EFFECTIVE="$OCI_CONTAINER_CONFIG_PATH"
+
   OCI_PRIVATE_KEY_EFFECTIVE="$OCI_PRIVATE_KEY_PEM_SNIPPET"
-  if [[ "$OCI_PRIVATE_KEY_EFFECTIVE" == *"<PASTE_PRIVATE_KEY_CONTENT_HERE>"* ]] && [[ -f "$OCI_PRIVATE_KEY_FILE" ]]; then
+  if [[ "$OCI_PRIVATE_KEY_EFFECTIVE" == *"PASTE_PRIVATE_KEY_CONTENT_HERE"* ]] && [[ -f "$OCI_PRIVATE_KEY_FILE" ]]; then
     OCI_PRIVATE_KEY_EFFECTIVE="$(escape_newlines < "$OCI_PRIVATE_KEY_FILE")"
     log "Using OCI private key content from OCI_PRIVATE_KEY_FILE=${OCI_PRIVATE_KEY_FILE}"
+  fi
+
+  if [[ "$OCI_PRIVATE_KEY_EFFECTIVE" == *"PASTE_PRIVATE_KEY_CONTENT_HERE"* ]]; then
+    die "OCI private key is still placeholder. Set OCI_PRIVATE_KEY_PEM_SNIPPET or provide OCI_PRIVATE_KEY_FILE=$OCI_PRIVATE_KEY_FILE"
   fi
 
   cat >> "$GRAFANA_DS_DIR/datasources.yml" <<EOF_OCI_DS
@@ -120,7 +129,7 @@ if [[ "$OCI_DS_ENABLED" == "true" ]]; then
     jsonData:
       environment: local
       profile0: ${OCI_CONFIG_PROFILE}
-      configFilePath0: ${OCI_CONFIG_FILE}
+      configFilePath0: ${OCI_CONFIG_PATH_EFFECTIVE}
       tenancy0: ${OCI_TENANCY_OCID}
       user0: ${OCI_USER_OCID}
       region0: ${OCI_REGION}
@@ -128,6 +137,17 @@ if [[ "$OCI_DS_ENABLED" == "true" ]]; then
     secureJsonData:
       privateKey0: "${OCI_PRIVATE_KEY_EFFECTIVE}"
 EOF_OCI_DS
+fi
+
+OCI_GRAFANA_MOUNTS=""
+if [[ "$OCI_DS_ENABLED" == "true" ]]; then
+  OCI_GRAFANA_MOUNTS+=$'\n'
+  OCI_GRAFANA_MOUNTS+="      - ${OCI_CONFIG_FILE}:${OCI_CONTAINER_CONFIG_PATH}:ro"
+
+  if [[ -f "$OCI_PRIVATE_KEY_FILE" ]]; then
+    OCI_GRAFANA_MOUNTS+=$'\n'
+    OCI_GRAFANA_MOUNTS+="      - ${OCI_PRIVATE_KEY_FILE}:${OCI_CONTAINER_PRIVATE_KEY_PATH}:ro"
+  fi
 fi
 
 write_file "$GRAFANA_DASH_PROV_DIR/dashboards.yml" <<'EOF_DP'
@@ -460,6 +480,7 @@ services:
       - ${GRAFANA_DATA_DIR}:/var/lib/grafana
       - ${BASE_DIR}/grafana/provisioning:/etc/grafana/provisioning:ro
       - ${GRAFANA_DASH_DIR}:/var/lib/grafana/dashboards:ro
+${OCI_GRAFANA_MOUNTS}
     networks: [monitoring]
 
   prometheus:
