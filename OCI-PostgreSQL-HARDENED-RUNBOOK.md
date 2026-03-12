@@ -735,3 +735,88 @@ curl -kI https://127.0.0.1:8443/login
 5. **Ops hygiene**
    - Add CI checks: `bash -n`, `shellcheck`, and config generation smoke test.
    - Create `make` targets (`make deploy`, `make destroy`, `make test`) for operator consistency.
+
+---
+
+## 12) OCI Metrics datasource + OCI PostgreSQL metrics dashboard
+
+The current build can auto-provision:
+
+1. **Oracle Cloud Infrastructure Metrics** Grafana datasource (`oci-metrics-datasource`)  
+2. **OCI PostgreSQL metrics dashboard** (`oci-postgresql-metrics.json`)
+3. **OCI PostgreSQL unified insights dashboard** (`postgresql-unified-insights.json`)
+
+### Required `.env` variables
+
+```env
+# OCI datasource toggle and identity
+OCI_DS_ENABLED=true
+OCI_DS_NAME="Oracle Cloud Infrastructure Metrics"
+OCI_DS_UID=oci-metrics
+
+# OCI auth profile reference
+OCI_CONFIG_PROFILE=DEFAULT
+OCI_CONFIG_FILE=/Users/shadab/.oci/config
+OCI_PRIVATE_KEY_FILE=/Users/shadab/Downloads/OracleContent/Keys/oci_config/oci_api_key.pem
+
+# OCI identity values
+OCI_TENANCY_OCID=ocid1.tenancy.oc1..<REPLACE_ME>
+OCI_USER_OCID=ocid1.user.oc1..<REPLACE_ME>
+OCI_REGION=ap-tokyo-1
+OCI_FINGERPRINT=aa:bb:cc:dd:...
+
+# Private key: either inline snippet OR read from OCI_PRIVATE_KEY_FILE
+OCI_PRIVATE_KEY_PEM_SNIPPET="-----BEGIN PRIVATE KEY-----\nPASTE_PRIVATE_KEY_CONTENT_HERE\n-----END PRIVATE KEY-----"
+
+# Dashboard defaults for OCI PostgreSQL metrics scope
+OCI_PG_COMPARTMENT_OCID=ocid1.compartment.oc1..<REPLACE_ME>
+OCI_PG_RESOURCE_GROUP=postgresql
+```
+
+### DEFAULT profile mapping used from your local OCI config
+
+Current values extracted from `/Users/shadab/.oci/config` (`[DEFAULT]`):
+
+- `OCI_CONFIG_PROFILE=DEFAULT`
+- `OCI_CONFIG_FILE=/Users/shadab/.oci/config`
+- `OCI_TENANCY_OCID=ocid1.tenancy.oc1..aaaaaaaafhegmvy2da7xzh2b5jbmhdkfr4cr4e37m5filt4zgxs6mfl7icua`
+- `OCI_USER_OCID=ocid1.user.oc1..aaaaaaaa5cq3iewffep5nzqb7qzoe6mpj45gt4kndvzwvuxzzavpbiucqqaq`
+- `OCI_REGION=ap-tokyo-1`
+- `OCI_FINGERPRINT=de:50:15:13:af:bd:76:fa:f4:77:ad:d4:af:70:a5:d6`
+
+### Private key snippet example format
+
+```env
+OCI_PRIVATE_KEY_PEM_SNIPPET=-----BEGIN PRIVATE KEY-----\nMIIEv...<redacted>...\n-----END PRIVATE KEY-----
+```
+
+> Keep `\n` escaped in `.env`.  
+> If you keep the placeholder `PASTE_PRIVATE_KEY_CONTENT_HERE`, generator will try to load content from `OCI_PRIVATE_KEY_FILE`.
+
+### Deploy/redeploy to apply OCI datasource + dashboard
+
+```bash
+sudo ./deploy_stack.sh
+```
+
+Generated assets:
+
+- `${BASE_DIR}/grafana/provisioning/datasources/datasources.yml`
+- `${BASE_DIR}/grafana/dashboards/oci-postgresql-metrics.json`
+- `${BASE_DIR}/grafana/dashboards/postgresql-unified-insights.json`
+
+`postgresql-unified-insights.json` is generated natively by `generate_configs.sh` (bootstrapped from embedded structure) and does not require importing an external JSON dashboard file at runtime.
+
+Unified dashboard datasource mapping:
+
+- Prometheus panels → `GRAFANA_DS_UID`
+- OCI panels → `OCI_DS_UID`
+
+The OCI dashboard includes panels for:
+
+- CPU Utilization
+- Memory Utilization
+- Storage Utilization
+- Database Connections
+- Read IOPS
+- Write IOPS

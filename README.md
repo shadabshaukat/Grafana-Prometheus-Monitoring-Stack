@@ -163,6 +163,61 @@ Build a **single unified dashboard** with two sections:
    - dead tuple ratio by table
    - autovacuum cadence
 
+### OCI Metrics datasource auto-provisioning
+
+This repo now provisions **Oracle Cloud Infrastructure Metrics** datasource (`oci-metrics-datasource`) when `OCI_DS_ENABLED=true`.
+
+Set these values in `.env`:
+
+```env
+OCI_DS_ENABLED=true
+OCI_DS_NAME="Oracle Cloud Infrastructure Metrics"
+OCI_DS_UID=oci-metrics
+OCI_CONFIG_PROFILE=DEFAULT
+OCI_CONFIG_FILE=/Users/shadab/.oci/config
+OCI_PRIVATE_KEY_FILE=/path/to/oci_api_key.pem
+OCI_TENANCY_OCID=ocid1.tenancy.oc1..<REPLACE_ME>
+OCI_USER_OCID=ocid1.user.oc1..<REPLACE_ME>
+OCI_REGION=ap-tokyo-1
+OCI_FINGERPRINT=aa:bb:cc:...
+OCI_PRIVATE_KEY_PEM_SNIPPET="-----BEGIN PRIVATE KEY-----\nPASTE_PRIVATE_KEY_CONTENT_HERE\n-----END PRIVATE KEY-----"
+OCI_PG_COMPARTMENT_OCID=ocid1.compartment.oc1..<REPLACE_ME>
+OCI_PG_RESOURCE_GROUP=postgresql
+```
+
+Notes:
+
+- If `OCI_PRIVATE_KEY_PEM_SNIPPET` is left as placeholder and `OCI_PRIVATE_KEY_FILE` exists, generator will read key content from file automatically.
+- Keep `\\n` escaped if setting the full key inline in `.env`.
+
+### New OCI PostgreSQL dashboard
+
+The generator creates:
+
+- `${BASE_DIR}/grafana/dashboards/oci-postgresql-metrics.json`
+- `${BASE_DIR}/grafana/dashboards/postgresql-unified-insights.json`
+
+`postgresql-unified-insights.json` is now **bootstrapped directly by the stack** (generated from `generate_configs.sh`) and does **not** require importing/migrating an external JSON at runtime.
+
+It includes:
+
+- PostgreSQL Prometheus panels (availability, connections, TPS, cache hit, deadlocks, DB size, top SQL)
+- OCI Monitoring panels (CPU, memory, connections, read/write IOPS)
+
+Datasource mapping is automatic:
+
+- Prometheus panels use `GRAFANA_DS_UID`
+- OCI panels use `OCI_DS_UID`
+
+Panels include (OCI Monitoring datasource):
+
+- CPU Utilization
+- Memory Utilization
+- Storage Utilization
+- Database Connections
+- Read IOPS
+- Write IOPS
+
 ---
 
 ## TLS and certificate rotation

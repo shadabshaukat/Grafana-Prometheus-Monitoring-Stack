@@ -7,6 +7,10 @@ source "$ROOT_DIR/lib/common.sh"
 
 load_env
 
+escape_newlines() {
+  sed ':a;N;$!ba;s/\n/\\n/g'
+}
+
 FORCE="false"
 if [[ "${1:-}" == "--force" ]]; then
   FORCE="true"
@@ -100,6 +104,32 @@ datasources:
     editable: true
 EOF_DS
 
+if [[ "$OCI_DS_ENABLED" == "true" ]]; then
+  OCI_PRIVATE_KEY_EFFECTIVE="$OCI_PRIVATE_KEY_PEM_SNIPPET"
+  if [[ "$OCI_PRIVATE_KEY_EFFECTIVE" == *"<PASTE_PRIVATE_KEY_CONTENT_HERE>"* ]] && [[ -f "$OCI_PRIVATE_KEY_FILE" ]]; then
+    OCI_PRIVATE_KEY_EFFECTIVE="$(escape_newlines < "$OCI_PRIVATE_KEY_FILE")"
+    log "Using OCI private key content from OCI_PRIVATE_KEY_FILE=${OCI_PRIVATE_KEY_FILE}"
+  fi
+
+  cat >> "$GRAFANA_DS_DIR/datasources.yml" <<EOF_OCI_DS
+  - name: ${OCI_DS_NAME}
+    uid: ${OCI_DS_UID}
+    type: oci-metrics-datasource
+    access: proxy
+    editable: true
+    jsonData:
+      environment: local
+      profile0: ${OCI_CONFIG_PROFILE}
+      configFilePath0: ${OCI_CONFIG_FILE}
+      tenancy0: ${OCI_TENANCY_OCID}
+      user0: ${OCI_USER_OCID}
+      region0: ${OCI_REGION}
+      fingerprint0: ${OCI_FINGERPRINT}
+    secureJsonData:
+      privateKey0: "${OCI_PRIVATE_KEY_EFFECTIVE}"
+EOF_OCI_DS
+fi
+
 write_file "$GRAFANA_DASH_PROV_DIR/dashboards.yml" <<'EOF_DP'
 apiVersion: 1
 providers:
@@ -113,6 +143,258 @@ providers:
     options:
       path: /var/lib/grafana/dashboards
 EOF_DP
+
+write_file "$GRAFANA_DASH_DIR/oci-postgresql-metrics.json" <<EOF_OCI_DASH
+{
+  "title": "OCI PostgreSQL Metrics (OCI Monitoring)",
+  "uid": "oci-postgresql-metrics",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "tags": ["oci", "postgresql", "monitoring"],
+  "templating": {
+    "list": [
+      {
+        "name": "compartment",
+        "type": "textbox",
+        "label": "Compartment OCID",
+        "query": "${OCI_PG_COMPARTMENT_OCID}",
+        "current": {"text": "${OCI_PG_COMPARTMENT_OCID}", "value": "${OCI_PG_COMPARTMENT_OCID}"}
+      },
+      {
+        "name": "resourceGroup",
+        "type": "textbox",
+        "label": "Resource Group",
+        "query": "${OCI_PG_RESOURCE_GROUP}",
+        "current": {"text": "${OCI_PG_RESOURCE_GROUP}", "value": "${OCI_PG_RESOURCE_GROUP}"}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "CPU Utilization (%)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
+      "targets": [{"refId": "A", "queryText": "CpuUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory Utilization (%)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
+      "targets": [{"refId": "A", "queryText": "MemoryUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Storage Utilization (%)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
+      "targets": [{"refId": "A", "queryText": "StorageUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Connections",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
+      "targets": [{"refId": "A", "queryText": "DatabaseConnections[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Read IOPS",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
+      "targets": [{"refId": "A", "queryText": "ReadIOPS[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Write IOPS",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
+      "targets": [{"refId": "A", "queryText": "WriteIOPS[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
+    }
+  ]
+}
+EOF_OCI_DASH
+
+ALL_VAR='$__all'
+INSTANCE_VAR='$instance'
+DATNAME_VAR='$datname'
+
+write_file "$GRAFANA_DASH_DIR/postgresql-unified-insights.json" <<EOF_UNIFIED_DASH
+{
+  "title": "OCI PostgreSQL Unified Insights",
+  "uid": "postgresql-unified-insights",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "tags": ["postgresql", "prometheus", "oci", "unified"],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "type": "query",
+        "label": "DB Instance",
+        "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+        "query": "label_values(pg_up, instance)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": false,
+        "current": {"text": "All", "value": "${ALL_VAR}"}
+      },
+      {
+        "name": "datname",
+        "type": "query",
+        "label": "Database",
+        "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+        "query": "label_values(datname)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": false,
+        "current": {"text": "All", "value": "${ALL_VAR}"}
+      },
+      {
+        "name": "compartment",
+        "type": "textbox",
+        "label": "OCI Compartment OCID",
+        "query": "${OCI_PG_COMPARTMENT_OCID}",
+        "current": {"text": "${OCI_PG_COMPARTMENT_OCID}", "value": "${OCI_PG_COMPARTMENT_OCID}"}
+      },
+      {
+        "name": "resourceGroup",
+        "type": "textbox",
+        "label": "OCI Resource Group",
+        "query": "${OCI_PG_RESOURCE_GROUP}",
+        "current": {"text": "${OCI_PG_RESOURCE_GROUP}", "value": "${OCI_PG_RESOURCE_GROUP}"}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "PostgreSQL Core (Prometheus)",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "collapsed": false
+    },
+    {
+      "type": "stat",
+      "title": "Postgres Up",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [{"refId": "A", "expr": "max(pg_up{instance=~\"${INSTANCE_VAR}\"})"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "type": "stat",
+      "title": "Active Connections",
+      "gridPos": {"h": 4, "w": 5, "x": 4, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [{"refId": "A", "expr": "sum(pg_stat_activity_count{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\",state=\"active\"})"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "type": "stat",
+      "title": "TPS",
+      "gridPos": {"h": 4, "w": 5, "x": 9, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [{"refId": "A", "expr": "sum(rate(pg_stat_database_xact_commit{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m])) + sum(rate(pg_stat_database_xact_rollback{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "type": "stat",
+      "title": "Cache Hit %",
+      "gridPos": {"h": 4, "w": 5, "x": 14, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [{"refId": "A", "expr": "100 * sum(pg_stat_database_blks_hit{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}) / clamp_min(sum(pg_stat_database_blks_hit{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}) + sum(pg_stat_database_blks_read{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}), 1)"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "type": "stat",
+      "title": "Deadlocks / s",
+      "gridPos": {"h": 4, "w": 5, "x": 19, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [{"refId": "A", "expr": "sum(rate(pg_stat_database_deadlocks{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Transactions/s (Commit + Rollback)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [
+        {"refId": "A", "expr": "sum(rate(pg_stat_database_xact_commit{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "commit"},
+        {"refId": "B", "expr": "sum(rate(pg_stat_database_xact_rollback{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}[5m]))", "legendFormat": "rollback"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Database Size (bytes)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [
+        {"refId": "A", "expr": "sum(pg_database_size_bytes{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"})", "legendFormat": "db size"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Top SQL Total Exec Time (ms)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 13},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [
+        {"refId": "A", "expr": "topk(10, sum by (short_query) (pg_stat_statements_top_total_exec_time_ms{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}))", "legendFormat": "{{short_query}}"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Top SQL Calls",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 13},
+      "datasource": {"type": "prometheus", "uid": "${GRAFANA_DS_UID}"},
+      "targets": [
+        {"refId": "A", "expr": "topk(10, sum by (short_query) (pg_stat_statements_top_calls{instance=~\"${INSTANCE_VAR}\",datname=~\"${DATNAME_VAR}\"}))", "legendFormat": "{{short_query}}"}
+      ]
+    },
+    {
+      "type": "row",
+      "title": "OCI Monitoring (OCI Metrics Datasource)",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 21},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "OCI CPU Utilization (%)",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 22},
+      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
+      "targets": [{"refId": "A", "queryText": "CpuUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "OCI Memory Utilization (%)",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 22},
+      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
+      "targets": [{"refId": "A", "queryText": "MemoryUtilization[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "OCI Connections",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 22},
+      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
+      "targets": [{"refId": "A", "queryText": "DatabaseConnections[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "OCI Read/Write IOPS",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 30},
+      "datasource": {"type": "oci-metrics-datasource", "uid": "${OCI_DS_UID}"},
+      "targets": [
+        {"refId": "A", "queryText": "ReadIOPS[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"},
+        {"refId": "B", "queryText": "WriteIOPS[1m].mean()", "compartmentOCID": "\$compartment", "resourceGroup": "\$resourceGroup"}
+      ]
+    }
+  ]
+}
+EOF_UNIFIED_DASH
 
 write_file "$NGINX_CONF_DIR/default.conf" <<EOF_NGX
 server {
